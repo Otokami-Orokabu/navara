@@ -54,6 +54,8 @@ function generateBuildings(count: number, radius: number): BoxChildConfig[] {
 const run = async () => {
   const view = new ThreeView<DefaultDescriptions>({
     debug: true,
+    // Lit tiles: the exposure below is tuned for the ambient-lit (darker) basemap.
+    useNormal: true,
   });
 
   const defaultPlugin = new DefaultPlugin();

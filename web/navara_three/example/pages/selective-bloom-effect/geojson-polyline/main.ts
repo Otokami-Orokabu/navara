@@ -100,6 +100,8 @@ const run = async () => {
         color: new Color().setStyle("#ff0000"),
         emissiveIntensity: 0.5,
         width: params.width,
+        // The default maxWidth (1000 m) clamps a 10 px line to sub-pixel from 1,500 km up.
+        maxWidth: 100_000,
         effectIds: [bloomEffect.id],
       },
     });

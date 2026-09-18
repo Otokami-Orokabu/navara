@@ -94,7 +94,7 @@ The `SelectiveBloomEffectDesc` class is a Descriptor that applies a selective bl
 
 **Type:** `number | undefined`
 
-**Description:** Specifies the number of mip levels used by the bloom blur. Each additional level roughly doubles how far the bloom spreads.
+**Description:** Specifies the number of mip levels used by the bloom blur. Each additional level roughly doubles how far the bloom spreads. The value is rounded to an integer and clamped to at least `1`.
 
 **Default:** `8`
 

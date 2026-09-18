@@ -87,7 +87,8 @@ export class SelectiveBloomEffectDesc extends SelectiveEffectDesc<
   }
 
   get bloomLevels(): number {
-    return this.bloom.levels ?? DEFAULT_LEVELS;
+    // MipmapBlurPass needs a positive integer level count; 0 leaves it with no targets to sample.
+    return Math.max(1, Math.round(this.bloom.levels ?? DEFAULT_LEVELS));
   }
 
   constructor(view: ThreeView, ctx: ViewContext, config: EffectConfig) {
@@ -233,7 +234,10 @@ class SelectiveBloomPass extends PostProcessingPass {
           if (bitValue > 0.5) {
             vec3 emissive = texture2D(tEmissive, vUv).rgb;
             float luma = dot(emissive, vec3(0.299, 0.587, 0.114));
-            float pass = smoothstep(threshold, threshold + smoothing, luma);
+            // smoothstep is undefined for equal edges, so smoothing 0 falls back to a hard cutoff.
+            float pass = smoothing > 0.0
+              ? smoothstep(threshold, threshold + smoothing, luma)
+              : step(threshold, luma);
             gl_FragColor = vec4(emissive * pass, 1.0);
           } else {
             gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);

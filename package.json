@@ -21,6 +21,7 @@
     "build:example": "pnpm build && pnpm -r run build:example",
     "build:integration": "pnpm integration-tests -r run build",
     "test": "pnpm --filter './web/**' -r run test",
+    "test:maplibre": "pnpm -C web/navara_maplibre_style/integration-test test:maplibre",
     "format": "pnpm --filter './web/**' -r run format",
     "format:check": "pnpm --filter './web/**' -r run format:check",
     "lint": "pnpm --filter './web/**' -r run lint",
@@ -33,7 +34,7 @@
     "preview:site": "wrangler dev",
     "deploy:site": "pnpm assemble:site && wrangler deploy",
     "deploy:redirects": "wrangler deploy -c workers/redirects/navara-preview/wrangler.jsonc",
-    "pack:externals": "pnpm pack -r --pack-destination externals --filter './web/**' --filter '!./web/integration-tests/**'"
+    "pack:externals": "pnpm pack -r --pack-destination externals --filter './web/**' --filter '!./web/integration-tests/**' --filter '!./web/navara_maplibre_style/integration-test'"
   },
   "license": "MIT OR Apache-2.0",
   "dependencies": {

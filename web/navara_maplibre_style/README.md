@@ -18,6 +18,10 @@ await view.init();
 
 For detailed usage, supported features, and known limitations, see the [MapLibre Style documentation](https://navara.world/docs/maplibre_style/about/).
 
+## Development
+
+When changing the plugin, run the unit tests (`pnpm test`) and the render tests against MapLibre's expected images (`pnpm test:maplibre` at the repo root). See [`integration-test/README.md`](integration-test/README.md).
+
 ## License
 
 MIT OR Apache-2.0

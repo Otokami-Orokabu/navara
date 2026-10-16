@@ -540,10 +540,6 @@ pub fn zoom_level_to_camera_distance(
     }
 }
 
-pub fn is_tile_url(s: &str) -> bool {
-    s.contains("/{x}") && s.contains("/{y}") && s.contains("/{z}")
-}
-
 /// Returns true if the URL points to a PMTiles archive, i.e. its path ends with
 /// `.pmtiles` (case-insensitive), ignoring any query string or fragment.
 pub fn is_pmtiles_url(s: &str) -> bool {

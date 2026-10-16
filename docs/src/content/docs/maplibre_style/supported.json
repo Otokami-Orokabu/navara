@@ -240,7 +240,7 @@
           "status": "❌"
         },
         "raster-fade-duration": {
-          "status": "❌"
+          "status": "⚠️ Ignored; tiles appear without fading"
         },
         "raster-hue-rotate": {
           "status": "❌"
@@ -304,7 +304,15 @@
       "status": "✅"
     },
     "vector": {
-      "status": "✅"
+      "status": "⚠️ MapLibre Tiles (mlt encoding) are not supported",
+      "encoding": {
+        "mvt": {
+          "status": "✅"
+        },
+        "mlt": {
+          "status": "❌"
+        }
+      }
     },
     "raster": {
       "status": "✅"
@@ -643,25 +651,25 @@
       "status": "❌"
     },
     "sky": {
-      "status": "❌"
+      "status": "⚠️ Only atmosphere-blend, which is ignored"
     },
     "projection": {
-      "status": "❌"
+      "status": "⚠️ Ignored; always renders a globe"
     },
     "terrain": {
       "status": "✅"
     },
     "sprite": {
-      "status": "✅"
+      "status": "❌"
     },
     "glyphs": {
-      "status": "✅"
+      "status": "❌"
     },
     "font-faces": {
       "status": "✅"
     },
     "transition": {
-      "status": "❌"
+      "status": "⚠️ Ignored; style changes apply immediately"
     }
   },
   "light": {
@@ -698,7 +706,7 @@
       "status": "❌"
     },
     "atmosphere-blend": {
-      "status": "❌"
+      "status": "⚠️ Ignored; MapLibre's globe atmosphere is not drawn"
     }
   },
   "terrain": {
@@ -711,15 +719,15 @@
   },
   "projection": {
     "type": {
-      "status": "❌"
+      "status": "⚠️ Ignored; always renders a globe"
     }
   },
   "transition": {
     "duration": {
-      "status": "❌"
+      "status": "⚠️ Ignored; style changes apply immediately"
     },
     "delay": {
-      "status": "❌"
+      "status": "⚠️ Ignored; style changes apply immediately"
     }
   },
   "sprite": {

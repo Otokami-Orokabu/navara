@@ -1,12 +1,14 @@
-import { generate_id_from_entity } from "@navaramap/core";
+import { type JobHandler, generate_id_from_entity } from "@navaramap/core";
 import {
   type RenderableFeatureAddedEvent,
   type RenderableFeature,
   RenderableFeatureChangedEvent,
+  type RenderableFeatureRemovedEvent,
 } from "@navaramap/engine";
 import { Mesh, Sprite, Object3D, Scene } from "three";
 
 import { declutterPairGroup } from "../declutter/participant";
+import { Layer } from "../layer";
 import {
   BatchedSdfTextMesh,
   InstancedSpriteMesh,
@@ -34,6 +36,7 @@ import {
 } from "./features/polygonOutline";
 import { renderPolyline, processPolylineChanged } from "./features/polyline";
 import { renderText, processTextChanged } from "./features/text";
+import { processObjectRemoved } from "./objectRemoved";
 
 import { setTransform } from ".";
 
@@ -96,10 +99,46 @@ export function renderFeature(
 export const isModelFeature = (feature: RenderableFeature): boolean =>
   !!feature.model;
 
+/** Products whose `featureCreated` was emitted; only those get a matching
+ * `featureRemoved`. */
+const createdFeatures = new WeakSet<Object3D>();
+
+export const renderableFeatureJobHandler = (
+  ctx: EventContext,
+): JobHandler<
+  RenderableFeatureAddedEvent,
+  RenderableFeatureChangedEvent,
+  RenderableFeatureRemovedEvent,
+  Mesh | Sprite | Object3D
+> => ({
+  name: "renderable feature",
+  events: {
+    requested: "renderable_feature_added",
+    changed: "renderable_feature_changed",
+    removed: "renderable_feature_removed",
+  },
+  start: (ev, abort) => processRenderableFeatureAdded(ctx, ev, abort),
+  change: (obj, ev) => processRenderableFeatureChanged(ctx, obj, ev),
+  teardown: (obj, ev) => {
+    // A start that threw after `featureCreated` left its object indexed only.
+    const created =
+      obj ?? (ev ? ctx.meshes.get(generate_id_from_entity(ev)) : undefined);
+    if (ev && created && createdFeatures.has(created)) {
+      const layer = ctx.layersManager.get(ev.layer_id);
+      if (layer && layer instanceof Layer) {
+        layer._unregisterFeatureEvaluator(ev.bits);
+        layer.emit("featureRemoved", { featureSetId: ev.bits });
+      }
+    }
+    processObjectRemoved(ctx, obj, ev);
+  },
+});
+
 export async function processRenderableFeatureAdded(
   ctx: EventContext,
   ev: RenderableFeatureAddedEvent,
-) {
+  abort: AbortController,
+): Promise<Mesh | Sprite | Object3D | undefined> {
   const {
     scenes,
     meshes,
@@ -144,6 +183,7 @@ export async function processRenderableFeatureAdded(
     featureLayerId,
     pairGroup,
   )?.then((r) => {
+    if (abort.signal.aborted) return r;
     // The glTF/Draco decode happened on the JS side, so report the actual
     // decoded GPU size back to the ledger (its compressed-payload estimate
     // undercounts Draco content). Draco decode inflates geometry markedly.
@@ -165,6 +205,10 @@ export async function processRenderableFeatureAdded(
     }
     return r;
   });
+
+  // Removed while the mesh was being built: the dispatcher tears the product
+  // down, and the engine no longer waits for a report.
+  if (abort.signal.aborted) return obj;
 
   if (!obj) {
     // renderFeature produced no mesh (e.g. empty geometry); still report
@@ -255,6 +299,10 @@ export async function processRenderableFeatureAdded(
 
   if (obj instanceof PolygonMesh && polygon && polygon.outline_geometry) {
     const outline = await renderPolygonOutline(ctx, polygon);
+    if (abort.signal.aborted) {
+      outline.clear();
+      return obj;
+    }
     outline.renderOrder = FEATURE_RENDER_ORDER;
     scenes.mrt.add(outline);
 
@@ -266,6 +314,7 @@ export async function processRenderableFeatureAdded(
     });
   }
 
+  createdFeatures.add(obj);
   handleFeatureCreatedEventByLayerId(
     featureHandler,
     obj,
@@ -305,27 +354,27 @@ export async function processRenderableFeatureAdded(
   // across decluttered swaps comes from the placement handoff in `setActive`.
   if (renderedType && obj instanceof BatchedSdfTextMesh) {
     void obj.whenLabelsSettled(TEXT_LABELS_SETTLE_TIMEOUT_MS).then(() => {
+      if (abort.signal.aborted) return;
       featureHandler.markFeatureIsRendered(renderedType, bits);
       ctx.renderFlag.forceUpdate = true;
     });
   }
+
+  return obj;
 }
 
 export async function processRenderableFeatureChanged(
   ctx: EventContext,
+  obj: Mesh | Sprite | Object3D,
   ev: RenderableFeatureChangedEvent,
 ) {
   const {
     scenes,
-    meshes,
     texturizedSceneByTileCoordinates,
     viewEvents,
     layersManager,
     updatedAt,
   } = ctx;
-  const id = generate_id_from_entity(ev);
-  const obj = meshes.get(id);
-  if (!obj) return;
 
   const layerId = ev.layer_id;
 

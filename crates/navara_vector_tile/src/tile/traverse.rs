@@ -121,11 +121,12 @@ pub fn traverse_tile(
         // draping resolve reads the field, and a node that never records one (e.g.
         // past `overscaled_max_zoom` on deeply subdivided/upsampled terrain) would
         // otherwise sit in the quadtree with a stale value forever.
-        tile.ready_parent_tile_handle = if source.should_upscale(tile) {
+        let drape_source = if source.should_upscale(tile) {
             ready_parent_tile_handle
         } else {
             None
         };
+        record_drape_source(tile, tc, drape_source);
         return TraversalResult::NotFound;
     }
 
@@ -197,7 +198,7 @@ pub fn traverse_tile(
     } else {
         inherited_drape_source
     };
-    tile.ready_parent_tile_handle = drape_source;
+    record_drape_source(tile, tc, drape_source);
 
     let were_children_rendered = tile.were_children_rendered;
     tile.were_children_rendered = false;
@@ -565,11 +566,27 @@ pub fn activate_all_renderable_features(
         .and_then(|fs| fs.iter().map(|f| f.0).collect::<Option<Vec<_>>>())
         .map(|ids| {
             for id in ids {
-                if let Ok(mut r) = renderable_features.get_mut(id) {
-                    r.activate(active);
+                if let Ok(r) = renderable_features.get_mut(id) {
+                    activate_if_changed(r, active);
                 };
             }
         });
+}
+
+/// Flip `active` only when it differs: a write through `Mut` marks the
+/// feature changed and the frontend re-applies the whole feature per change.
+/// A flip the frontend does not draw (see
+/// [`RenderableFeature::is_drawn_regardless_of_activation`]) is not marked,
+/// since a draped feature's change re-bakes every terrain tile it backs.
+pub fn activate_if_changed(mut feature: Mut<RenderableFeature>, active: bool) {
+    if feature.is_active() == active {
+        return;
+    }
+    if feature.is_drawn_regardless_of_activation() {
+        feature.bypass_change_detection().activate(active);
+    } else {
+        feature.activate(active);
+    }
 }
 
 pub fn are_all_renderable_features_active(
@@ -687,6 +704,19 @@ pub fn spawn_tile_entity(
     tc.rendered_tile_caches.insert(tile_handle, e.id());
 }
 
+/// Record `tile`'s drape source, flagging `tc` when it changed: the drape
+/// source hand-over re-resolves the shown terrain tiles only then.
+fn record_drape_source(
+    tile: &mut VectorTile,
+    tc: &mut TileCacheManager,
+    drape_source: Option<TileHandle>,
+) {
+    if tile.ready_parent_tile_handle != drape_source {
+        tile.ready_parent_tile_handle = drape_source;
+        tc.drape_sources_changed = true;
+    }
+}
+
 fn begin_traverse_tile(
     ellipsoid: &Ellipsoid<FloatType>,
     occluder: &EllipsoidalOccluder,
@@ -707,4 +737,102 @@ pub enum TraversalResult {
     NotFound,
     Failed,
     Overscaled,
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use navara_feature_component::render::PolygonRenderInformation;
+
+    fn point(active: bool) -> RenderableFeature {
+        RenderableFeature::Point {
+            coordinates: Default::default(),
+            crs: Default::default(),
+            active,
+            material: Default::default(),
+            transform: Default::default(),
+            feature_id: Entity::PLACEHOLDER,
+            render_info: Default::default(),
+            geometry: Default::default(),
+            feature_batch_id: 0,
+            batch_length: 0,
+        }
+    }
+
+    /// Setting the flag it already has leaves the feature unchanged for
+    /// change detection; a real flip marks it.
+    #[test]
+    fn it_should_mark_a_feature_changed_only_when_active_flips() {
+        let mut world = World::new();
+        let same = world.spawn(point(true)).id();
+        let flipped = world.spawn(point(true)).id();
+        world.clear_trackers();
+
+        let mut query = world.query::<&mut RenderableFeature>();
+        activate_if_changed(query.get_mut(&mut world, same).unwrap(), true);
+        activate_if_changed(query.get_mut(&mut world, flipped).unwrap(), false);
+
+        let mut changed = world.query_filtered::<Entity, Changed<RenderableFeature>>();
+        let changed: Vec<Entity> = changed.iter(&world).collect();
+        assert_eq!(changed, vec![flipped]);
+        assert!(!world.get::<RenderableFeature>(flipped).unwrap().is_active());
+    }
+
+    fn polygon(texturized: bool, outlined: bool) -> RenderableFeature {
+        RenderableFeature::Polygon {
+            coordinates: Default::default(),
+            crs: Default::default(),
+            active: true,
+            material: Default::default(),
+            geometry: Default::default(),
+            outline_geometry: outlined.then(Default::default),
+            transform: Default::default(),
+            feature_id: Entity::PLACEHOLDER,
+            render_info: PolygonRenderInformation {
+                should_be_texturized: texturized,
+                ..Default::default()
+            },
+            extent: None,
+            bounding_sphere: None,
+            feature_batch_id: 0,
+            batch_length: 0,
+        }
+    }
+
+    /// A draped polygon's flip is applied without marking it changed; a
+    /// direct one, or a draped one with a directly drawn outline, is marked.
+    #[test]
+    fn it_should_not_mark_a_draped_feature_changed_on_an_activation_flip() {
+        let mut world = World::new();
+        let draped = world.spawn(polygon(true, false)).id();
+        let outlined = world.spawn(polygon(true, true)).id();
+        let direct = world.spawn(polygon(false, false)).id();
+        world.clear_trackers();
+
+        let mut query = world.query::<&mut RenderableFeature>();
+        for e in [draped, outlined, direct] {
+            activate_if_changed(query.get_mut(&mut world, e).unwrap(), false);
+        }
+
+        let mut changed = world.query_filtered::<Entity, Changed<RenderableFeature>>();
+        let mut changed: Vec<Entity> = changed.iter(&world).collect();
+        changed.sort();
+        let mut expected = vec![outlined, direct];
+        expected.sort();
+        assert_eq!(changed, expected);
+        assert!(!world.get::<RenderableFeature>(draped).unwrap().is_active());
+    }
+
+    #[test]
+    fn it_should_flag_only_a_changed_drape_source() {
+        let mut tile = VectorTile::new(navara_core::TileXYZ { x: 0, y: 0, z: 0 }, 0., 0.);
+        let mut tc = TileCacheManager::default();
+
+        record_drape_source(&mut tile, &mut tc, None);
+        assert!(!tc.drape_sources_changed);
+
+        record_drape_source(&mut tile, &mut tc, Some(1));
+        assert!(tc.drape_sources_changed);
+        assert_eq!(tile.ready_parent_tile_handle, Some(1));
+    }
 }

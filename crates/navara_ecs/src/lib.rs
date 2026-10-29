@@ -1,6 +1,7 @@
 #![doc = include_str!("../README.md")]
 
 use bevy_ecs::{
+    change_detection::DetectChangesMut,
     entity::Entity,
     query::{With, Without},
     system::SystemState,
@@ -37,10 +38,9 @@ use navara_texture_fragment::{TextureFragmentLoadedEvent, TextureFragmentStatus}
 use navara_tile_component::{
     MartiniComponent, RasterTileQuadtree, TerrainExaggeration, TerrainHeightObserver,
     TerrainHeightRangeObserver, TerrainTile, TerrainTileQuadtree, TileHandle,
-    TileTerrainDataRequesterQuery, VectorTileQuadtree, compute_terrain_height_at_point,
-    terrain_height_range,
+    TileTerrainDataRequesterQuery, compute_terrain_height_at_point, terrain_height_range,
 };
-use navara_vector_tile::{LayerResources, VectorResolveRevision, resolve_vector_tile_states};
+use navara_vector_tile::VectorDrapeSources;
 use navara_window::{Window, WindowResizeEvent};
 use navara_worker::{
     DelegatedWorkerTasksResult, WorkerTaskCompleted, WorkerTaskCompletedEvent,
@@ -230,7 +230,10 @@ impl App {
         let Ok(mut feature) = query.get_mut(world, entity) else {
             return;
         };
-        let render_info = match feature.as_mut() {
+        // The frontend never reads `is_rendered` back, so the write is not a
+        // change: a change re-applies the whole feature there (and re-bakes a
+        // draped one). The traversals re-run on `Rendered` instead.
+        let render_info = match feature.bypass_change_detection() {
             RenderableFeature::Point { render_info, .. } => render_info,
             RenderableFeature::Billboard { render_info, .. } => render_info,
             RenderableFeature::Text { render_info, .. } => render_info,
@@ -248,7 +251,9 @@ impl App {
         let Ok(mut feature) = query.get_mut(world, entity) else {
             return;
         };
-        let RenderableFeature::Polyline { render_info, .. } = feature.as_mut() else {
+        // Not a change for the frontend; see `mark_point_is_rendered`.
+        let RenderableFeature::Polyline { render_info, .. } = feature.bypass_change_detection()
+        else {
             unreachable!("Unexpected RenderableFeature type");
         };
         render_info.is_rendered = true;
@@ -263,7 +268,9 @@ impl App {
         let Ok(mut feature) = query.get_mut(world, entity) else {
             return;
         };
-        let RenderableFeature::Polygon { render_info, .. } = feature.as_mut() else {
+        // Not a change for the frontend; see `mark_point_is_rendered`.
+        let RenderableFeature::Polygon { render_info, .. } = feature.bypass_change_detection()
+        else {
             unreachable!("Unexpected RenderableFeature type");
         };
         render_info.is_rendered = true;
@@ -295,11 +302,12 @@ impl App {
             });
     }
 
-    pub fn trigger_data_requester_failed(&mut self, bits: u64) {
+    pub fn trigger_data_requester_failed(&mut self, bits: u64, handle: i32) {
         self.app
             .world_mut()
             .write_message(navara_buffer_store::BufferStoreFailedEvent {
                 id: Entity::from_bits(bits),
+                handle,
             });
     }
 
@@ -741,68 +749,16 @@ impl App {
         requester.is_succeeded().then_some(requester.handle)
     }
 
-    /// Resolve the WebMercator texturized-vector tiles to drape on a terrain tile,
-    /// flattened across clamp-to-ground vector layers for the wasm boundary. Gathers the
-    /// terrain extent/scheme and the per-layer vector quadtrees from the ECS world, then
-    /// delegates the N:M overlap + budget logic to
-    /// [`resolve_vector_tile_states`](navara_vector_tile::resolve_vector_tile_states).
-    pub fn get_vector_tiles(&mut self, handle: TileHandle) -> Vec<ResolvedVectorTileState> {
-        let world = self.app.world_mut();
-
-        // Terrain tile extent + scheme, copied out so the resource borrow ends before the
-        // component queries below.
-        let Some((terrain_extent, terrain_is_geographic)) = world
-            .get_resource::<TerrainTileQuadtree>()
-            .and_then(|qt| qt.qt.get(handle))
-            .map(|tile| (tile.extent, tile.tiling_scheme.is_geographic()))
-        else {
-            return vec![];
-        };
-
-        // Snapshot (layer_id, quadtree entity), owned so the query borrow is released before
-        // the resource/quadtree borrows below.
-        let mut layer_refs: Vec<(String, Entity)> = {
-            let mut layers = world.query::<&LayerResources>();
-            layers
-                .iter(world)
-                .map(|r| (r.layer_id.clone(), r.quadtree))
-                .collect()
-        };
-
-        // Sort by the layer's declaration order (`LayerDescStore`, same source as
-        // `get_layer_index`) so the composite stacks vector layers like the raster path
-        // (lower order = bottom, later = on top), instead of the arbitrary ECS query
-        // iteration order the resolve would otherwise preserve.
-        {
-            let store = world.get_resource::<LayerDescStore>();
-            layer_refs.sort_by_key(|(layer_id, _)| {
-                store
-                    .and_then(|s| s.get_order(layer_id).copied())
-                    .unwrap_or(usize::MAX)
-            });
-        }
-
-        let mut qts = world.query::<&VectorTileQuadtree>();
-        let pairs: Vec<(String, &VectorTileQuadtree)> = layer_refs
-            .into_iter()
-            .filter_map(|(layer_id, quadtree)| {
-                qts.get(world, quadtree).ok().map(|qt| (layer_id, qt))
-            })
-            .collect();
-
-        resolve_vector_tile_states(terrain_extent, terrain_is_geographic, &pairs)
-    }
-
-    /// Monotonic counter that changes only when the vector-tile resolution could have
-    /// changed (a traverse ran — readiness lives in the traverse now). The web side reads
-    /// this once per frame and skips the per-terrain-tile `get_vector_tiles` calls while it
-    /// is unchanged.
-    pub fn vector_revision(&self) -> u32 {
+    /// The WebMercator texturized-vector tiles handed over to drape on a terrain tile,
+    /// flattened across clamp-to-ground vector layers for the wasm boundary (see
+    /// [`VectorDrapeSources`](navara_vector_tile::VectorDrapeSources)). The frontend re-reads
+    /// a tile when its handle is listed in the `vector_drape_changed` event.
+    pub fn get_vector_tiles(&self, handle: TileHandle) -> Vec<ResolvedVectorTileState> {
         self.app
             .world()
-            .get_resource::<VectorResolveRevision>()
-            .map(|r| r.0)
-            .unwrap_or(0)
+            .get_resource::<VectorDrapeSources>()
+            .map(|sources| sources.handed(handle).to_vec())
+            .unwrap_or_default()
     }
 
     /// Resolve the WebMercator raster tiles to bake into per-layer drape render targets

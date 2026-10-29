@@ -151,6 +151,31 @@ impl RenderableFeature {
         }
     }
 
+    /// Whether the frontend bakes this feature into terrain tiles: a draped
+    /// (texturized) polygon or polyline.
+    pub fn is_draped(&self) -> bool {
+        match self {
+            RenderableFeature::Polygon { render_info, .. } => render_info.should_be_texturized,
+            RenderableFeature::Polyline { render_info, .. } => render_info.should_be_texturized,
+            _ => false,
+        }
+    }
+
+    /// Whether the frontend draws this feature the same while active or not:
+    /// a draped feature is baked into terrain tiles whenever shown, and the
+    /// drape resolve picks which tile is baked. A polygon outline is drawn
+    /// directly and follows `active`.
+    pub fn is_drawn_regardless_of_activation(&self) -> bool {
+        let outlined = matches!(
+            self,
+            RenderableFeature::Polygon {
+                outline_geometry: Some(_),
+                ..
+            }
+        );
+        self.is_draped() && !outlined
+    }
+
     pub fn is_rendered(&self) -> bool {
         match self {
             RenderableFeature::Point { render_info, .. } => render_info.is_rendered,

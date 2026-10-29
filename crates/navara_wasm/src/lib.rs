@@ -330,8 +330,8 @@ impl Core {
     }
 
     #[wasm_bindgen(js_name = triggerDataRequesterFailed)]
-    pub fn trigger_data_requester_failed(&mut self, bits: u64) {
-        self.app.trigger_data_requester_failed(bits);
+    pub fn trigger_data_requester_failed(&mut self, bits: u64, handle: i32) {
+        self.app.trigger_data_requester_failed(bits, handle);
     }
 
     pub fn resize(&mut self, width: FloatType, height: FloatType, pixel_ratio: FloatType) {
@@ -682,14 +682,6 @@ impl Core {
             .into_iter()
             .map(VectorTileState::from)
             .collect()
-    }
-
-    /// Monotonic revision that changes only when the vector-tile resolution could have
-    /// changed. The web renderer reads it once per frame and skips the per-terrain-tile
-    /// `getVectorTileStates` calls while it is unchanged.
-    #[wasm_bindgen(js_name = vectorRevision)]
-    pub fn vector_revision(&self) -> u32 {
-        self.app.vector_revision()
     }
 
     /// The WebMercator raster tiles to bake into per-layer drape render targets for a
@@ -1140,6 +1132,29 @@ impl Core {
     #[wasm_bindgen(js_name = setMaxPendingRequests)]
     pub fn set_max_pending_requests(&mut self, value: u32) {
         self.app.set_max_pending_requests(value);
+    }
+
+    /// Caps the number of delegated worker tasks in flight across all task
+    /// kinds (terrain mesh, MVT parse, polygon / polyline build, ...).
+    #[wasm_bindgen(js_name = setMaxWorkerTasks)]
+    pub fn set_max_worker_tasks(&mut self, value: u32) {
+        self.app.set_max_worker_tasks(value);
+    }
+
+    /// Reports the worker-pool tasks in flight outside delegated tasks (image
+    /// decodes, Draco, descriptor / plugin tasks, tasks cancelled mid-run);
+    /// they take from the `setMaxWorkerTasks` cap.
+    #[wasm_bindgen(js_name = setWorkerExternalLoad)]
+    pub fn set_worker_external_load(&mut self, value: u32) {
+        self.app.set_worker_external_load(value);
+    }
+
+    /// Pauses or resumes worker intake: while paused, nothing that runs on
+    /// the worker pool is handed out, model feature adds and image fetches
+    /// included.
+    #[wasm_bindgen(js_name = setWorkerIntakePaused)]
+    pub fn set_worker_intake_paused(&mut self, paused: bool) {
+        self.app.set_worker_intake_paused(paused);
     }
 
     /// Sets the memory-pressure SSE multiplier range. `min` is the resting

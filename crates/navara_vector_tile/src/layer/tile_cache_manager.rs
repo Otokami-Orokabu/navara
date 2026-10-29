@@ -15,6 +15,9 @@ pub struct TileCacheManager {
     pub last_rendered_frame: usize,
     pub is_updated_in_this_frame: bool,
     pub needs_update: bool,
+    /// Set by a traverse that changed a tile's drape source
+    /// (`ready_parent_tile_handle`).
+    pub drape_sources_changed: bool,
 }
 
 impl TileCacheManager {

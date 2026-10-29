@@ -247,6 +247,41 @@ impl App {
         }
     }
 
+    /// Caps the number of delegated worker tasks in flight across all task
+    /// kinds; the frontend derives it from its worker pool size.
+    pub fn set_max_worker_tasks(&mut self, value: u32) {
+        if let Some(mut limits) = self
+            .app
+            .world_mut()
+            .get_resource_mut::<navara_worker::WorkerLimits>()
+        {
+            limits.max_pendings = value;
+        }
+    }
+
+    /// Reports the pool work the frontend runs outside delegated tasks; it
+    /// takes from the delegated-task cap (see `WorkerLimits`).
+    pub fn set_worker_external_load(&mut self, value: u32) {
+        if let Some(mut limits) = self
+            .app
+            .world_mut()
+            .get_resource_mut::<navara_worker::WorkerLimits>()
+        {
+            limits.external_load = value;
+        }
+    }
+
+    /// Pauses or resumes worker intake (see `WorkerLimits`).
+    pub fn set_worker_intake_paused(&mut self, paused: bool) {
+        if let Some(mut limits) = self
+            .app
+            .world_mut()
+            .get_resource_mut::<navara_worker::WorkerLimits>()
+        {
+            limits.intake_paused = paused;
+        }
+    }
+
     // === Memory budget ===
 
     pub fn set_cache_bytes(&mut self, bytes: Option<f64>) {

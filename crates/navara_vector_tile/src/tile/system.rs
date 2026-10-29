@@ -33,8 +33,8 @@ use crate::{
 
 use super::render::{OwningVectorTile, RenderedTile, VectorTileGpuCost};
 use super::traverse::{
-    TraversalResult, activate_all_renderable_features, are_all_renderable_features_active,
-    spawn_tile_entity, traverse_tile,
+    TraversalResult, activate_all_renderable_features, activate_if_changed,
+    are_all_renderable_features_active, spawn_tile_entity, traverse_tile,
 };
 
 /// Generic tile update system that delegates to `TileSource::prepare_tile`.
@@ -48,8 +48,8 @@ pub fn update_tiles(
     // trigger (see `needs_update`); `.1` (the real TerrainTileQuadtree) supplies terrain
     // heights read by extent — the scheme-agnostic source the raster traverse uses, so the
     // vector SSE follows the terrain's subdivision depth. `.2` is bumped whenever a traverse
-    // actually runs so the web side can skip its per-tile `getVectorTileStates` FFI when the
-    // resolution is unchanged. `.3` maps those heights onto the rendered surface. Bundled
+    // changed a drape source so the drape source hand-over re-resolves only then. `.3` maps
+    // those heights onto the rendered surface. Bundled
     // as one tuple param to stay within Bevy's per-system parameter limit.
     mut terrain: (
         Res<TerrainInformationQuadtree>,
@@ -135,10 +135,6 @@ pub fn update_tiles(
             if !needs_update {
                 continue;
             }
-
-            // A traverse is about to run, so the resolved vector tiles for some terrain
-            // tiles may change — signal the web side to re-fetch this frame.
-            terrain.2.bump();
 
             tc.needs_update = false;
 
@@ -257,6 +253,10 @@ pub fn update_tiles(
                 }
                 _ => {}
             };
+
+            if std::mem::take(&mut tc.drape_sources_changed) {
+                terrain.2.bump();
+            }
         }
     }
 }
@@ -503,9 +503,9 @@ fn set_rendered_tile_features_active(
     for feature_entity in feature_ids {
         if let Ok((feature_id, _)) = features.get(*feature_entity)
             && let Some(renderable_entity) = feature_id.0
-            && let Ok(mut renderable) = renderable_features.get_mut(renderable_entity)
+            && let Ok(renderable) = renderable_features.get_mut(renderable_entity)
         {
-            renderable.activate(active);
+            activate_if_changed(renderable, active);
         }
     }
 }

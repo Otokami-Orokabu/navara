@@ -34,6 +34,8 @@ pub struct EventStore {
     pub hillshade_backfilled: Vec<Entity>,
     pub hillshade_canceled: Vec<Entity>,
     pub terrain_exaggeration_updated: Option<TerrainExaggerationUpdated>,
+    /// Terrain tiles (handles) whose vector drape sources were handed over anew.
+    pub vector_drape_changed: Vec<u64>,
 }
 
 impl EventStore {
@@ -60,5 +62,6 @@ impl EventStore {
         self.hillshade_backfilled.clear();
         self.hillshade_canceled.clear();
         self.terrain_exaggeration_updated = None;
+        self.vector_drape_changed.clear();
     }
 }

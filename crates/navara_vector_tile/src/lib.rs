@@ -4,6 +4,7 @@ use bevy_ecs::schedule::{IntoScheduleConfigs, SystemSet};
 
 pub mod component;
 pub mod data_requester;
+pub mod drape_sources;
 pub mod layer;
 pub mod resolve;
 pub mod source;
@@ -11,6 +12,7 @@ pub mod source_cache;
 pub mod tile;
 
 pub use component::*;
+pub use drape_sources::{VectorDrapeSources, hand_over_vector_drape_sources};
 pub use layer::resource::LayerResources;
 pub use layer::tile_cache_manager::TileCacheManager;
 pub use navara_parser::mvt::{AsXYZ, PosConverter};
@@ -30,10 +32,9 @@ pub use tile::traverse::{
 };
 
 /// Monotonic counter bumped whenever the vector-tile resolution could have changed: a
-/// traverse ran (new/removed rendered tiles, terrain subdivision, or a tile's drape-source
-/// readiness flipped — all happen inside the traverse). The web renderer reads it once per
-/// frame and skips the per-terrain-tile `getVectorTileStates` FFI while it is unchanged.
-/// Wrapping is fine — only equality across consecutive frames matters.
+/// traverse changed a tile's drape source (`ready_parent_tile_handle`). The drape source
+/// hand-over ([`hand_over_vector_drape_sources`]) re-resolves the shown terrain tiles only
+/// when it changes. Wrapping is fine — only equality across consecutive frames matters.
 #[derive(Resource, Default)]
 pub struct VectorResolveRevision(pub u32);
 
@@ -67,6 +68,7 @@ impl Plugin for VectorTilePlugin {
         );
 
         app.init_resource::<VectorResolveRevision>();
+        app.init_resource::<VectorDrapeSources>();
 
         app.init_resource::<VectorTileSourceCache>().add_systems(
             Update,
@@ -77,6 +79,7 @@ impl Plugin for VectorTilePlugin {
                 data_requester::system::filter_requestable_data_requester,
                 tile::system::clear_caches,
                 tile::system::enforce_memory_budget,
+                hand_over_vector_drape_sources,
             )
                 .chain()
                 .in_set(VectorTileSet::Process),

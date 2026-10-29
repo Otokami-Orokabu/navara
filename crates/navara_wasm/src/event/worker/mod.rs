@@ -11,8 +11,8 @@ pub struct WorkerTaskDelegatedEvent {
     pub r#gen: u32,
     pub bits: u64,
     /// Dispatch urgency: 0 is the most urgent (see `Priority::rank`). The
-    /// platform keeps its pending stack sorted by this so a terrain mesh task
-    /// overtakes older, less urgent work waiting for a worker.
+    /// engine already emits a frame's tasks in this order and bounds how many
+    /// are in flight, so the platform starts them as they come.
     pub priority: u8,
 
     #[wasm_bindgen(getter_with_clone)]

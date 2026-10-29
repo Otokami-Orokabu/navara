@@ -81,6 +81,20 @@ GIS Processing Modules
 - Application layer can choose appropriate interface based on complexity needs
 - GPU receives final rendering commands via WebGL from Three.js
 
+#### **4. Frontend Job Protocol (events in, reports out)**
+
+The Rust core (the backend) owns every scheduling decision — which fetches
+and worker tasks are admitted, in what order, and when an entity lives or
+dies — and never runs async work itself. Each frame it emits a
+`*_requested` / `*_changed` / `*_removed` event per entity that needs
+frontend work; the frontend's `JobDispatcher`
+(`web/navara_core/src/event/`) starts, updates or tears down a job for each
+right away, with no queue of its own, and reports completion through the
+`trigger_*` / `set*` / `mark*` bindings, applied on the next `update()`.
+See [FRONTEND_JOB_PROTOCOL.md](FRONTEND_JOB_PROTOCOL.md) for the event
+contract, the dispatcher, the handler rules, the shared worker budget and
+the shared-fetch leader.
+
 ### **Independent Processing Model - Module Specialization**
 
 #### **Full Engine Processing (`navara_wasm` with 40+ modules)**
@@ -164,7 +178,7 @@ The project implements a sophisticated multi-language architecture:
 
 - **`@navaramap/core`** (`web/navara_core/`) - Core utilities, event management, type definitions
 - **`@navaramap/three`** (`web/navara_three/`) - Main Three.js integration with comprehensive 3D engine
-- **`@navaramap/worker`** (`web/navara_worker/`) - Web Worker abstraction with task queuing. Delegated engine tasks carry a `priority` (0 = most urgent, from the ECS `Priority` component): Rust emits them most urgent first and the web `EventManager` re-sorts the pending `worker_task_delegated` stack every pass, so a terrain mesh task overtakes MVT parses waiting for a free worker
+- **`@navaramap/worker`** (`web/navara_worker/`) - Web Worker abstraction with task queuing. Delegated engine tasks are admitted and ordered on the Rust side (`Priority`, `OrderByDistance`) and queued on the pool in the order they are emitted; the frontend keeps no queue of its own (see [FRONTEND_JOB_PROTOCOL.md](FRONTEND_JOB_PROTOCOL.md))
 - **`@navaramap/three-api`** (`web/navara_three_api/`) - Bridge between Three.js and WASM API
 
 ### **WASM Integration** (`web/wasm/`)

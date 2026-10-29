@@ -74,6 +74,7 @@ pub struct Events<'a> {
     pub hillshade_backfilled: Vec<ReconstructableComponentEvent<&'a HillshadeBackfillEventData>>,
     pub hillshade_canceled: Vec<EntityEvent>,
     pub terrain_exaggeration_updated: Option<TerrainExaggerationUpdated>,
+    pub vector_drape_changed: Vec<u64>,
 }
 
 impl<'a> Events<'a> {
@@ -223,6 +224,11 @@ impl<'a> Events<'a> {
 
         for e in store.hillshade_canceled.iter() {
             events.hillshade_canceled.push((*e).into());
+            is_changed = true;
+        }
+
+        if !store.vector_drape_changed.is_empty() {
+            events.vector_drape_changed = store.vector_drape_changed.clone();
             is_changed = true;
         }
 

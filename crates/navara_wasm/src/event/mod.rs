@@ -43,12 +43,13 @@ pub struct Events {
     hillshade_backfilled: Vec<HillshadeBackfilledEvent>,
     hillshade_canceled: Vec<EntityEvent>,
     terrain_exaggeration_updated: Option<TerrainExaggerationUpdatedEvent>,
+    vector_drape_changed: Vec<TileHandle>,
 }
 
 // Move-out accessors: each hands the stack's ownership to JS (elements are
 // boxed once for their JS wrappers, nothing is cloned). Method names must be
-// `take_<stack key>` — `EventManager.pushEvents` derives the method name from
-// its stack keys.
+// `take_<stack key>` — `JobDispatcher` derives the method name from its stack
+// keys.
 #[wasm_bindgen]
 impl Events {
     pub fn take_camera_transform_updated(&mut self) -> Option<Transform> {
@@ -116,6 +117,9 @@ impl Events {
     }
     pub fn take_terrain_exaggeration_updated(&mut self) -> Option<TerrainExaggerationUpdatedEvent> {
         self.terrain_exaggeration_updated.take()
+    }
+    pub fn take_vector_drape_changed(&mut self) -> Vec<TileHandle> {
+        std::mem::take(&mut self.vector_drape_changed)
     }
 }
 
@@ -217,10 +221,10 @@ pub struct DataRequestEvent {
     pub bits: u64,
 
     /// Fetch urgency: 0 is the most urgent (see `Priority::rank`). The web
-    /// side keeps its pending fetch queue sorted by this. Requests without an
-    /// ECS `Priority` (tileset / PMTiles bootstrap reads, 3D Tiles content)
-    /// rank as `Extreme`, matching the engine sender that dispatches them
-    /// ahead of the prioritized ones.
+    /// side starts every fetch right away and passes this on as the browser's
+    /// fetch priority hint. Requests without an ECS `Priority` (tileset /
+    /// PMTiles bootstrap reads, 3D Tiles content) rank as `Extreme`, matching
+    /// the engine sender that dispatches them ahead of the prioritized ones.
     pub priority: u8,
 
     pub handle: i32, // handle
@@ -417,6 +421,7 @@ impl From<navara_event::Events<'_>> for Events {
                     horizon_minimum_height: ev.horizon_minimum_height,
                 }
             }),
+            vector_drape_changed: ev.vector_drape_changed,
         }
     }
 }

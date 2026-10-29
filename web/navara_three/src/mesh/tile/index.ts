@@ -451,14 +451,8 @@ export class TileMesh
   }
 
   async _init(mesh: MeshAdded) {
-    await this.createMesh(
-      generate_id_from_entity(mesh),
-      mesh.mesh,
-      mesh.material,
-      mesh.transform,
-      mesh.globe,
-    );
-
+    // Registered first so a `createMesh` that throws still releases what the
+    // constructor acquired.
     this.addEventListener("removedFromWorld", () => {
       this.dispose(
         this.ctx.tileMapByHandle,
@@ -466,6 +460,14 @@ export class TileMesh
         this.ctx.tileMeshToFragmentIds,
       );
     });
+
+    await this.createMesh(
+      generate_id_from_entity(mesh),
+      mesh.mesh,
+      mesh.material,
+      mesh.transform,
+      mesh.globe,
+    );
   }
 
   private async createMesh(
@@ -684,6 +686,12 @@ export class TileMesh
    */
   updateTerrainExaggeration() {
     this.applyExaggeratedBounds(this.shadowMesh?.geometry ?? this.geometry);
+  }
+
+  /** Re-read the vector drape sources Rust handed over for this tile on the
+   * next render. */
+  markVectorDrapeSourcesChanged() {
+    this.vectorDrape.markSourcesChanged();
   }
 
   // Set the exaggerated bounds on the geometry and the terrain-only geometry

@@ -125,9 +125,9 @@ resolvers** (`mesh/tile/drapeResolver.ts`), created per `TileMesh`:
   runtime scheme flip rebuilds every tile, so the choice never changes
   mid-life).
 
-Each resolver refreshes its Rust-resolved slots when its resolve revision
-(`vectorRevision()` / `rasterRevision()`) moved, and re-bakes when its
-slot/content signature changed.
+Each resolver refreshes its Rust-resolved slots when Rust signals a change (the
+`vector_drape_changed` event listing the tile / a moved `rasterRevision()`), and
+re-bakes when its slot/content signature changed.
 
 Vector tiles are draped meshes (`PolygonMesh` / `PolylineMesh`, themselves
 Material-Enhancer materials). Each tile reserves a block of **vector-region**
@@ -486,7 +486,7 @@ sequenceDiagram
   participant C as TileTextureCompositor
   participant Cache as TileTextureCache
 
-  TM->>TM: vectorDrape.update(): vectorRevision() changed? → refreshSlots()
+  TM->>TM: vectorDrape.update(): listed in vector_drape_changed? → refreshSlots()
   TM->>TM: rasterDrape.update(): rasterRevision() changed? → refreshSlots()
   alt a resolver's slot/content signature changed
     TM->>C: renderVectorScenes() / renderRasterTiles() → per-layer RTs

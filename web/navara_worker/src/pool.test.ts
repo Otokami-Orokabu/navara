@@ -39,6 +39,13 @@ vi.spyOn(workerpool, "pool").mockImplementation(
         );
       },
       terminate: () => undefined,
+      stats: () => ({
+        totalWorkers: 1,
+        busyWorkers: 0,
+        idleWorkers: 1,
+        pendingTasks: 0,
+        activeTasks: 0,
+      }),
     }) as unknown as Pool,
 );
 

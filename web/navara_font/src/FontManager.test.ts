@@ -81,10 +81,6 @@ vi.stubGlobal("fetch", mockFetch);
 // Helpers
 // ---------------------------------------------------------------------------
 
-function createMockConcurrencyManager() {
-  return { increment: vi.fn(), decrement: vi.fn() };
-}
-
 /** Latin + CJK two-face family. */
 function createTestFamily(): FontFamily {
   return {
@@ -203,7 +199,6 @@ describe("FontManager", () => {
     // Restore the default in case a test overrode the implementation.
     mocks.mockLoadFont.mockResolvedValue({ ok: true, cmapRanges: null });
     manager = new FontManager(WORKER_URL);
-    manager.setConcurrencyManager(createMockConcurrencyManager() as never);
     mockFetchSuccess();
     setupBatchMock();
   });
@@ -2002,16 +1997,6 @@ describe("FontManager", () => {
   // -----------------------------------------------------------------------
 
   describe("client initialization", () => {
-    it("should reject when concurrencyManager is not set", async () => {
-      const bare = new FontManager(WORKER_URL);
-
-      await expect(bare.loadFont(FONT_URL, false)).rejects.toThrow(
-        "concurrencyManager not set",
-      );
-
-      bare.dispose();
-    });
-
     it("should create the FontWorkerClient only once across multiple loads", async () => {
       await manager.loadFont("https://fonts.test/a.ttf", false);
       await manager.loadFont("https://fonts.test/b.ttf", false);

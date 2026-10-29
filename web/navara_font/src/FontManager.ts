@@ -1,4 +1,3 @@
-import type { ConcurrencyManager } from "@navaramap/worker";
 import {
   DataTexture,
   LinearFilter,
@@ -92,9 +91,10 @@ export class FontManager {
   private _workerUrl: string | URL;
   private _client: FontWorkerClient | undefined;
   private _clientPromise: Promise<FontWorkerClient> | undefined;
-  private _concurrencyManager: ConcurrencyManager | undefined;
   /** Worker cache budget, delivered when the (lazy) client is created. */
   private _fontBudgetBytes: number | undefined;
+  /** Delivered when the (lazy) client is created; see `setWorkerCoreReservation`. */
+  private _reserveWorkerCore: (() => () => void) | undefined;
   /** Tracks in-flight fetch promises to avoid duplicate requests. */
   private _pending = new Map<string, Promise<void>>();
   /** Tracks fonts that have been successfully loaded. */
@@ -165,10 +165,6 @@ export class FontManager {
 
   constructor(workerUrl: string | URL) {
     this._workerUrl = workerUrl;
-  }
-
-  setConcurrencyManager(concurrencyManager: ConcurrencyManager) {
-    this._concurrencyManager = concurrencyManager;
   }
 
   /**
@@ -282,15 +278,10 @@ export class FontManager {
   private _ensureClient(): Promise<FontWorkerClient> {
     if (this._client) return Promise.resolve(this._client);
     if (this._clientPromise) return this._clientPromise;
-    if (!this._concurrencyManager) {
-      return Promise.reject(
-        new Error("FontManager: concurrencyManager not set"),
-      );
-    }
-    const cm = this._concurrencyManager;
     this._clientPromise = (async () => {
-      const client = new FontWorkerClient(this._workerUrl, cm, {
+      const client = new FontWorkerClient(this._workerUrl, {
         fontBudgetBytes: this._fontBudgetBytes,
+        reserveWorkerCore: this._reserveWorkerCore,
       });
       await client.ready();
       this._client = client;
@@ -309,6 +300,16 @@ export class FontManager {
    */
   setMemoryBudget(bytes: number | undefined): void {
     this._fontBudgetBytes = bytes;
+  }
+
+  /**
+   * Lets the font worker hold a core of the view's worker pool while it
+   * loads fonts or shapes text (see `reserveWorkerCore` in
+   * `@navaramap/worker`). Must be called before the first font loads, like
+   * {@link setMemoryBudget}.
+   */
+  setWorkerCoreReservation(reserve: () => () => void): void {
+    this._reserveWorkerCore = reserve;
   }
 
   /**

@@ -140,8 +140,17 @@ pub fn traverse_terrain(
         None => unreachable!(),
     };
 
-    match qt.qt.get_mut(handle) {
-        Some(tile) => begin_traverse_terrain(ellipsoid, occluder, exaggeration, frame, tile),
+    let previous_traversal_frame = tc.previous_traversal_frame;
+    let dem_wanted_since = match qt.qt.get_mut(handle) {
+        Some(tile) => {
+            // The wait carries over only from the traversal right before this one.
+            let since = tile
+                .dem_wanted_since
+                .take()
+                .filter(|_| tile.visited_at == previous_traversal_frame);
+            begin_traverse_terrain(ellipsoid, occluder, exaggeration, frame, tile);
+            since
+        }
         None => unreachable!(),
     };
 
@@ -256,14 +265,25 @@ pub fn traverse_terrain(
     }
 
     if meets_sse || meets_sse_ancestors {
-        // The SSE leaf fetches its own DEM right away, even while it is
-        // still being upsampled: the upsampled mesh is only a stand-in until
-        // the real one lands, and waiting for the leaf to be activated (the
-        // whole upsample chain above it swapped in first) would only delay
-        // the replacement. Intermediate levels never meet SSE, so they still
-        // fetch nothing (see the activated-only fetch at the end); a fast
-        // zoom-in's transient leaves are dropped with their tiles.
-        if !meets_sse_ancestors {
+        // The SSE leaf fetches its own DEM without waiting to be activated:
+        // the upsampled mesh is only a stand-in until the real one lands, and
+        // waiting for the whole upsample chain above it to swap in first
+        // would only delay the replacement. A leaf with a stand-in waits
+        // `STAND_IN_FETCH_DELAY_MS` instead, so a fast zoom-in's transient
+        // leaves are dropped with their tiles before they fetch; any other
+        // leaf requests at once. Intermediate levels never meet SSE (see the
+        // activated-only fetch at the end).
+        let has_stand_in =
+            is_renderable && tile_ready_state.is_upsamplable && !tile_ready_state.is_terrain_ready;
+        if !meets_sse_ancestors
+            && (!has_stand_in
+                || has_wanted_dem_long_enough(
+                    qt.qt.get_mut(handle).unwrap(),
+                    dem_wanted_since,
+                    frame,
+                    tc,
+                ))
+        {
             prepare_tile_resource(
                 command,
                 qt,
@@ -700,14 +720,15 @@ pub fn traverse_terrain(
 
     // This tile is on screen here without meeting SSE: its children cannot
     // render (beyond the source's max zoom), or are still building. Only an
-    // activated tile fetches its own DEM from here, so the intermediate
-    // levels of an upsample chain, each briefly on screen while its children
-    // build, do not all fetch. `prepare_tile_resource` skips the overscale
-    // band itself.
+    // activated tile that stays on screen for `STAND_IN_FETCH_DELAY_MS`
+    // fetches its own DEM from here, so the intermediate levels of an
+    // upsample chain, each briefly on screen while its children build, do
+    // not all fetch. `prepare_tile_resource` skips the overscale band itself.
     if is_activated
         && !meets_sse_ancestors
         && tile_ready_state.is_upsamplable
         && !tile_ready_state.is_terrain_ready
+        && has_wanted_dem_long_enough(qt.qt.get_mut(handle).unwrap(), dem_wanted_since, frame, tc)
     {
         prepare_tile_resource(
             command,
@@ -1241,6 +1262,32 @@ pub(crate) fn prepare_upsamplable_terrain_data(
     tile.terrain_data = Some(terrain_data);
 }
 
+/// How long a tile with a stand-in mesh on screen (upsampled from an
+/// ancestor) must keep wanting its own DEM, over consecutive traversals,
+/// before the traversal fetches it. A camera flight drops its transient
+/// leaves and briefly shown levels within this time, so they never fetch.
+const STAND_IN_FETCH_DELAY_MS: f64 = 200.;
+
+/// Record that this traversal wants `tile`'s own DEM, continuing the wait
+/// from `wanted_since`, and whether it has waited
+/// [`STAND_IN_FETCH_DELAY_MS`]. While it has not, terrain traverses again at
+/// the due time even if the camera stops.
+fn has_wanted_dem_long_enough(
+    tile: &mut TerrainTile,
+    wanted_since: Option<f64>,
+    frame: &FrameManager,
+    tc: &mut TileCacheManager,
+) -> bool {
+    let now = frame.updated_at();
+    let since = *tile.dem_wanted_since.insert(wanted_since.unwrap_or(now));
+    let due = since + STAND_IN_FETCH_DELAY_MS;
+    if now >= due {
+        return true;
+    }
+    tc.retraverse_at = Some(tc.retraverse_at.map_or(due, |at| at.min(due)));
+    false
+}
+
 fn begin_traverse_terrain(
     ellipsoid: &Ellipsoid<FloatType>,
     occluder: &EllipsoidalOccluder,
@@ -1283,6 +1330,40 @@ mod tests {
         let frustum = CameraFrustum::new(&camera, 0.1, 1e9, Angle::new(fov_deg).rad().val(), 1.0);
         let occluder = EllipsoidalOccluder::new(&camera_ecef, WGS84_64);
         (camera, frustum, occluder)
+    }
+
+    // ----- has_wanted_dem_long_enough ----------------------------------------
+
+    #[test]
+    fn has_wanted_dem_long_enough_schedules_a_retraversal_at_the_earliest_due_time() {
+        let mut frame = FrameManager::default();
+        frame.set_updated_at(1000.);
+        let mut tc = TileCacheManager::default();
+        let mut a = TerrainTile::new(TileXYZ { x: 0, y: 0, z: 4 }, 0., 0.);
+        let mut b = TerrainTile::new(TileXYZ { x: 1, y: 0, z: 4 }, 0., 0.);
+
+        assert!(!has_wanted_dem_long_enough(
+            &mut a,
+            Some(900.),
+            &frame,
+            &mut tc
+        ));
+        assert!(!has_wanted_dem_long_enough(&mut b, None, &frame, &mut tc));
+        assert_eq!(tc.retraverse_at, Some(900. + STAND_IN_FETCH_DELAY_MS));
+        assert!(
+            !tc.force_update,
+            "no traversal is forced before the due time"
+        );
+
+        frame.set_updated_at(900. + STAND_IN_FETCH_DELAY_MS);
+        tc.retraverse_at = None;
+        assert!(has_wanted_dem_long_enough(
+            &mut a,
+            Some(900.),
+            &frame,
+            &mut tc
+        ));
+        assert_eq!(tc.retraverse_at, None);
     }
 
     // ----- begin_traverse_terrain --------------------------------------------
@@ -1343,7 +1424,7 @@ mod tests {
     #[derive(bevy_ecs::prelude::Resource)]
     struct TargetHandle(TileHandle);
 
-    #[derive(bevy_ecs::prelude::Resource)]
+    #[derive(bevy_ecs::prelude::Resource, Clone)]
     struct TraverseConfig {
         max_sse: f64,
         /// Vertical field of view (degrees) used by `run_terrain_traverse`,
@@ -1395,6 +1476,7 @@ mod tests {
         };
         let terrain_layer: Option<&TerrainLayer> = terrain_layers.iter().next();
 
+        tc.begin_traversal(frame.rendered_frame());
         let sorted_layers: Vec<_> = tiles.iter().sort::<&Order>().collect();
         let result = traverse_terrain(
             &mut commands,
@@ -1479,6 +1561,12 @@ mod tests {
             .resource_mut::<SourceStore>()
             .add(source.source_id().to_string(), source);
         app.world_mut().spawn((layer, order));
+    }
+
+    fn advance_time(app: &mut App, ms: f64) {
+        let mut frame = app.world_mut().resource_mut::<FrameManager>();
+        let at = frame.updated_at() + ms;
+        frame.set_updated_at(at);
     }
 
     /// App holding the terrain quadtree root and the resources `traverse_terrain`
@@ -2246,8 +2334,9 @@ mod tests {
     /// Upsample-first: children of a tile with real terrain render upsampled
     /// right away. A child that is on screen only because its own children
     /// cannot render (z2 is over max zoom here) — not because it meets SSE —
-    /// does NOT fetch its own DEM until it is actually on screen; then the
-    /// deferred fetch is issued. (The SSE leaf fetches at once, see
+    /// does NOT fetch its own DEM until it has stayed on screen for
+    /// `STAND_IN_FETCH_DELAY_MS`; then the deferred fetch is issued. (The SSE
+    /// leaf does not wait to be on screen, see
     /// `traverse_terrain_sse_leaf_fetches_dem_while_still_upsampling`.)
     #[test]
     fn traverse_terrain_defers_dem_fetch_of_a_non_sse_leaf_until_it_is_on_screen() {
@@ -2311,20 +2400,29 @@ mod tests {
             app.world_mut().get_mut::<Mesh>(e).unwrap().active = true;
         }
         app.update();
+        assert_eq!(
+            terrain_requester_handles(&mut app),
+            vec![root],
+            "an activated upsampled leaf first waits on its stand-in"
+        );
 
+        advance_time(&mut app, STAND_IN_FETCH_DELAY_MS);
+        app.update();
         let requested = terrain_requester_handles(&mut app);
         for &child in &children {
             assert!(
                 requested.contains(&child),
-                "an activated upsampled leaf fetches its own DEM"
+                "an activated upsampled leaf fetches its own DEM once it stays on screen"
             );
         }
     }
 
     /// The SSE leaf does not wait to be activated before fetching its own
-    /// DEM: the fetch goes out in the traversal that selects it, in parallel
-    /// with its upsample, so the real mesh replaces the stand-in as early as
-    /// possible. Levels that do not meet SSE still fetch nothing.
+    /// DEM: the fetch goes out once it has been the leaf for
+    /// `STAND_IN_FETCH_DELAY_MS`, in parallel with its upsample, so the real
+    /// mesh replaces the stand-in as early as possible. Levels that do not
+    /// meet SSE still fetch nothing, and a leaf that gives way before the
+    /// delay starts over when it becomes the leaf again.
     #[test]
     fn traverse_terrain_sse_leaf_fetches_dem_while_still_upsampling() {
         let (mut app, root) = terrain_app_with_root();
@@ -2378,13 +2476,40 @@ mod tests {
             root_sse > children_sse,
             "the root's SSE ({root_sse}) must exceed its children's ({children_sse})"
         );
-        app.insert_resource(TraverseConfig {
+        let leaves = TraverseConfig {
             max_sse: children_sse,
+            fov: 60.0,
+        };
+        app.insert_resource(leaves.clone());
+        app.update();
+        advance_time(&mut app, STAND_IN_FETCH_DELAY_MS / 2.);
+        app.update();
+        assert_eq!(
+            terrain_requester_handles(&mut app),
+            vec![root],
+            "a leaf with a stand-in waits before fetching"
+        );
+
+        // The children give way to their own children, then become the
+        // leaves again: the wait starts over.
+        app.insert_resource(TraverseConfig {
+            max_sse: 0.,
             fov: 60.0,
         });
         app.update();
+        app.insert_resource(leaves);
+        advance_time(&mut app, STAND_IN_FETCH_DELAY_MS / 2.);
+        app.update();
+        assert_eq!(
+            terrain_requester_handles(&mut app),
+            vec![root],
+            "the wait of a leaf that gave way starts over"
+        );
 
-        // Nothing has activated the children between the two traversals (no
+        advance_time(&mut app, STAND_IN_FETCH_DELAY_MS);
+        app.update();
+
+        // Nothing has activated the children between the traversals (no
         // mesh system runs here, so they are as un-activated as in the first
         // update, where they fetched nothing): the only difference is that
         // they now meet SSE.

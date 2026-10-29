@@ -6,9 +6,8 @@ export type TileHandlerDeps = {
   /** Accessor (not a snapshot) — the Core is created asynchronously after
    * WASM init and can be dropped on dispose. */
   getCore: () => Core | undefined;
-  /** Per-frame cached revision snapshots (refreshed once per `_render`), so
+  /** Per-frame cached revision snapshot (refreshed once per `_render`), so
    * per-tile `onBeforeRender` gating costs no WASM-boundary call. */
-  getVectorRevision: () => number;
   getRasterRevision: () => number;
 };
 
@@ -35,7 +34,6 @@ export function createTileHandler(deps: TileHandlerDeps): TileHandler {
     getVectorTileStates: (handle) => {
       return getCore()?.getVectorTileStates(handle);
     },
-    vectorRevision: deps.getVectorRevision,
     getRasterTileStates: (handle) => {
       return getCore()?.getRasterTileStates(handle);
     },

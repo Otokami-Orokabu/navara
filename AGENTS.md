@@ -23,6 +23,7 @@ If a change touches only `web/`, the pnpm equivalents are faster: `pnpm run buil
 
 - [guide/ARCHITECTURE.md](guide/ARCHITECTURE.md) — system design and Rust/WASM/TypeScript communication patterns
 - [guide/RENDERING_PIPELINE.md](guide/RENDERING_PIPELINE.md) — the TS rendering pipeline: pass ordering, the MRT G-buffer (layout, encodings, blending invariants, define stamping), scenes/pass routing, and the `lit` system
+- [guide/FRONTEND_JOB_PROTOCOL.md](guide/FRONTEND_JOB_PROTOCOL.md) — how Rust schedules and the frontend runs async work: event contract, `JobDispatcher`, handler rules, the shared worker budget and fetch leader
 - [guide/CRATES.md](guide/CRATES.md) — reference for the 40+ Rust crates
 - [guide/WASM_API_POLICY.md](guide/WASM_API_POLICY.md) — read before designing TypeScript APIs that wrap WASM
 - [guide/RELEASE.md](guide/RELEASE.md) — release flow (changelog generation, tagging, npm/GitHub Release)

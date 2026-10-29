@@ -56,15 +56,27 @@ pub struct TileCacheManager {
     /// `rendered_tile_caches`.
     pub retained: FxHashMap<TileHandle, RetainedEntry>,
     pub last_rendered_frame: usize,
+    /// Frame of the terrain traversal before the one in `last_rendered_frame`.
+    pub previous_traversal_frame: usize,
     pub is_updated_in_this_frame: bool,
     pub prev_layers_len: usize,
-    /// Set when a source changes (e.g. `updateSource`) to force one re-traversal
-    /// even with a static camera, so terrain tiles pick up the new fetch config
-    /// read live from the source. Cleared once consumed.
+    /// Forces one re-traversal even with a static camera. Set when a source
+    /// changes (e.g. `updateSource`), so terrain tiles pick up the new fetch
+    /// config read live from the source. Cleared once consumed.
     pub force_update: bool,
+    /// `FrameManager::updated_at` at which a tile waiting to fetch its own
+    /// DEM is due, so a static camera re-traverses once then. Each traversal
+    /// clears it and the waiting tiles set it again.
+    pub retraverse_at: Option<f64>,
 }
 
 impl TileCacheManager {
+    /// Record that a terrain traversal runs in `frame`.
+    pub fn begin_traversal(&mut self, frame: usize) {
+        self.previous_traversal_frame = self.last_rendered_frame;
+        self.last_rendered_frame = frame;
+    }
+
     /// Show or hide the tile's mesh in full. Returns whether the mesh came
     /// on screen in full — from hidden or from fill mode — so a caller can
     /// react to a tile taking over its region.

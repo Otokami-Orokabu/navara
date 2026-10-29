@@ -183,7 +183,9 @@ export class SplatMeshDesc extends MeshDesc<
   SplatMeshEvent
 > {
   private config: SplatMeshConfig;
-  private holdsSlot = false;
+  /** Releases the CPU core held while the splat loads (Spark decodes on
+   * workers of its own). */
+  private releaseCore?: () => void;
   /** Bound listener for the shared SparkRenderer's `onDirty` fanout. */
   private onSparkDirty?: () => void;
   /** Shared dynamic-origin driver this splat registers with (RTC). */
@@ -220,11 +222,9 @@ export class SplatMeshDesc extends MeshDesc<
     this.controller = controller;
     const effectiveLod = requestedLod && rendererLod;
 
-    // Slot held only during load; released on `mesh.initialized` settle.
-    if (this.ctx.concurrencyManager.canIncrement()) {
-      this.ctx.concurrencyManager.increment();
-      this.holdsSlot = true;
-    }
+    this.releaseCore?.();
+    this.releaseCore = this.ctx.reserveWorkerCore();
+    const releaseCore = this.releaseCore;
 
     // Pin url locally so a concurrent `onUpdateConfig()` doesn't make
     // the catch log the new url for an old failure.
@@ -240,7 +240,7 @@ export class SplatMeshDesc extends MeshDesc<
         console.warn(`SplatMesh load failed (${url}):`, err);
         this.emit("error", err);
       })
-      .finally(() => this.releaseSlot());
+      .finally(releaseCore);
     return mesh;
   }
 
@@ -279,13 +279,6 @@ export class SplatMeshDesc extends MeshDesc<
     const mesh = this.raw;
     if (mesh && this.controller) {
       this.controller.register(mesh, mesh.matrixWorld.clone());
-    }
-  }
-
-  private releaseSlot(): void {
-    if (this.holdsSlot) {
-      this.ctx.concurrencyManager.decrement();
-      this.holdsSlot = false;
     }
   }
 
@@ -345,9 +338,9 @@ export class SplatMeshDesc extends MeshDesc<
     super.onDestroy();
     if (mesh) this.controller?.unregister(mesh);
     mesh?.dispose();
+    // Destroyed before `mesh.initialized` settled.
+    this.releaseCore?.();
 
-    // Fallback: destroyed before `mesh.initialized` settled.
-    this.releaseSlot();
     if (this.onSparkDirty) {
       releaseSparkRenderer(this.ctx, this.onSparkDirty);
       this.onSparkDirty = undefined;

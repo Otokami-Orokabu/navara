@@ -1,5 +1,5 @@
 import {
-  generate_id_from_entity,
+  type JobHandler,
   PolygonMaterialLike,
   TransferablePolygonBatchedFeatureLike,
   TransferableRasterDEMDataLike,
@@ -47,11 +47,31 @@ import { runDelegatedWorkerTask } from "./workerTaskSettlement";
 
 import type { EventContext } from ".";
 
+/**
+ * Delegated worker tasks have no product: the result goes back to the engine
+ * through `triggerWorkerTaskCompleted`, and a removal only cancels the pool
+ * promise through the job's abort signal.
+ */
+export const workerTaskJobHandler = (
+  ctx: EventContext,
+): JobHandler<WorkerTaskDelegatedEvent, never, EntityEvent, undefined> => ({
+  name: "worker task",
+  events: {
+    requested: "worker_task_delegated",
+    removed: "worker_task_removed",
+  },
+  start: async (ev, abort) => {
+    await processWorkerTaskDelegatedEvent(ctx, ev, abort);
+    return undefined;
+  },
+  teardown: () => {},
+});
+
 export async function processWorkerTaskDelegatedEvent(
   ctx: EventContext,
   event: WorkerTaskDelegatedEvent,
+  abort: AbortController,
 ) {
-  const id = generate_id_from_entity(event);
   // Every wasm-bindgen getter access allocates a NEW owned wrapper (reading
   // `event.task.<kind>` twice would leak one copy), so read `task` and each
   // params object exactly once and free whatever this dispatch does not
@@ -63,7 +83,7 @@ export async function processWorkerTaskDelegatedEvent(
     if (constructTerrainMesh) {
       return await processConstructTerrainMesh(
         ctx,
-        id,
+        abort,
         event.bits,
         constructTerrainMesh,
         task.delegator_id,
@@ -73,7 +93,7 @@ export async function processWorkerTaskDelegatedEvent(
     if (upsampleTerrainMesh) {
       return await processUpsampleTerrainMesh(
         ctx,
-        id,
+        abort,
         event.bits,
         upsampleTerrainMesh,
         task.delegator_id,
@@ -83,7 +103,7 @@ export async function processWorkerTaskDelegatedEvent(
     if (constructPolygon) {
       return await processConstructPolygonBatchedFeature(
         ctx,
-        id,
+        abort,
         event.bits,
         constructPolygon,
         task.delegator_id,
@@ -93,7 +113,7 @@ export async function processWorkerTaskDelegatedEvent(
     if (constructPolyline) {
       return await processConstructPolylineBatchedFeature(
         ctx,
-        id,
+        abort,
         event.bits,
         constructPolyline,
         task.delegator_id,
@@ -103,7 +123,7 @@ export async function processWorkerTaskDelegatedEvent(
     if (parseMvt) {
       return await processParseMvtTile(
         ctx,
-        id,
+        abort,
         event.bits,
         parseMvt,
         task.delegator_id,
@@ -111,22 +131,6 @@ export async function processWorkerTaskDelegatedEvent(
     }
   } finally {
     task.free();
-  }
-}
-
-export function processWorkerTaskRemovedEvent(
-  ctx: EventContext,
-  event: EntityEvent,
-) {
-  const id = generate_id_from_entity(event);
-  const promise = ctx.workerPoolPromises.get(id);
-  if (promise) {
-    ctx.workerPoolPromises.delete(id);
-    // `cancel()` rejects the promise (CancellationError) and returns it; the
-    // rejection is observed and classified by the dispatch-side
-    // `settleWorkerTask`, so it must NOT be awaited here — awaiting would
-    // rethrow the cancellation into the event pipeline.
-    promise.cancel();
   }
 }
 
@@ -245,7 +249,7 @@ function buildTerrainTransferableGeometry(
 
 async function processConstructTerrainMesh(
   ctx: EventContext,
-  id: string,
+  abort: AbortController,
   bits: bigint,
   params: ConstructTerrainMeshParameters,
   delegator_id: ReconstructableEntity,
@@ -253,7 +257,7 @@ async function processConstructTerrainMesh(
   const { buf: bufHandler, tileHandler, workerTaskHandler } = ctx;
   await runDelegatedWorkerTask(
     ctx,
-    id,
+    abort,
     bits,
     "construct terrain mesh",
     params,
@@ -361,7 +365,7 @@ function isStrictAncestor(
 
 async function processUpsampleTerrainMesh(
   ctx: EventContext,
-  id: string,
+  abort: AbortController,
   bits: bigint,
   params: UpsampleTerrainMeshParameters,
   delegator_id: ReconstructableEntity,
@@ -369,7 +373,7 @@ async function processUpsampleTerrainMesh(
   const { buf: bufHandler, tileHandler, workerTaskHandler } = ctx;
   await runDelegatedWorkerTask(
     ctx,
-    id,
+    abort,
     bits,
     "upsample terrain mesh",
     params,
@@ -520,7 +524,7 @@ async function processUpsampleTerrainMesh(
 
 async function processConstructPolygonBatchedFeature(
   ctx: EventContext,
-  id: string,
+  abort: AbortController,
   bits: bigint,
   params: ConstructPolygonBatchedFeatureParameters,
   delegator_id: ReconstructableEntity,
@@ -528,7 +532,7 @@ async function processConstructPolygonBatchedFeature(
   const { buf: bufHandler, featureHandler, workerTaskHandler } = ctx;
   await runDelegatedWorkerTask(
     ctx,
-    id,
+    abort,
     bits,
     "construct polygon batched feature",
     params,
@@ -741,7 +745,7 @@ async function processConstructPolygonBatchedFeature(
 
 async function processConstructPolylineBatchedFeature(
   ctx: EventContext,
-  id: string,
+  abort: AbortController,
   bits: bigint,
   params: ConstructPolylineBatchedFeatureParameters,
   delegator_id: ReconstructableEntity,
@@ -749,7 +753,7 @@ async function processConstructPolylineBatchedFeature(
   const { buf: bufHandler, featureHandler, workerTaskHandler } = ctx;
   await runDelegatedWorkerTask(
     ctx,
-    id,
+    abort,
     bits,
     "construct polyline batched feature",
     params,
@@ -974,7 +978,7 @@ async function processConstructPolylineBatchedFeature(
 
 async function processParseMvtTile(
   ctx: EventContext,
-  id: string,
+  abort: AbortController,
   bits: bigint,
   params: ParseMvtTileParameters,
   delegator_id: ReconstructableEntity,
@@ -982,7 +986,7 @@ async function processParseMvtTile(
   const { buf: bufHandler, workerTaskHandler } = ctx;
   await runDelegatedWorkerTask(
     ctx,
-    id,
+    abort,
     bits,
     "parse MVT tile",
     params,

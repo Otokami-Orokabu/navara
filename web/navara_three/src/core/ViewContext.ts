@@ -1,6 +1,9 @@
 import { EventHandler } from "@navaramap/core";
 import type { Core } from "@navaramap/engine";
-import type { ConcurrencyManager } from "@navaramap/worker";
+import {
+  reserveWorkerCore,
+  type ReadonlyConcurrencyManager,
+} from "@navaramap/worker";
 import type { Pass as PostProcessingPass } from "postprocessing";
 import type {
   Material,
@@ -81,8 +84,8 @@ export class ViewContext extends EventHandler<ViewContextEvents> {
     private _scenes: Scenes,
     private layersManager: LayersManager,
     private renderPassOrchestrator: RenderPassOrchestrator,
-    /** Manager for scheduling work on Web Workers. */
-    private _concurrencyManager: ConcurrencyManager,
+    /** Worker pool size and the pool tasks in flight. */
+    private _concurrencyManager: ReadonlyConcurrencyManager,
     private _core: Core,
     private _meshes: MeshCache,
     private _commonUniforms: CommonUniforms,
@@ -99,9 +102,19 @@ export class ViewContext extends EventHandler<ViewContextEvents> {
     return this._scenes;
   }
 
-  /** Manager for scheduling work on Web Workers. */
-  get concurrencyManager(): ConcurrencyManager {
+  /** Worker pool size and the pool tasks in flight. */
+  get concurrencyManager(): ReadonlyConcurrencyManager {
     return this._concurrencyManager;
+  }
+
+  /**
+   * Hold one CPU core for a thread outside the worker pool (e.g. a decoder
+   * worker of its own) while it works: one pool worker stops taking tasks
+   * until the returned function is called. Release it as soon as the work
+   * ends; calling it again is a no-op.
+   */
+  reserveWorkerCore(): () => void {
+    return reserveWorkerCore();
   }
 
   get selectiveEffectRegistry(): SelectiveEffectRegistry {

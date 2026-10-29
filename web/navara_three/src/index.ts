@@ -1,4 +1,4 @@
-import { EventManager, EventHandler, Globe, Plugin } from "@navaramap/core";
+import { JobDispatcher, EventHandler, Globe, Plugin } from "@navaramap/core";
 import type {
   CameraPosition,
   GlobeOptions,
@@ -7,6 +7,7 @@ import type {
   Color as CoreColor,
   LatLngHeight,
   LatLng,
+  RegisteredJobKind,
 } from "@navaramap/core";
 import initCore, {
   Core,
@@ -35,7 +36,11 @@ import {
   type GeographicExtent,
 } from "@navaramap/three-api";
 import {
+  canWorkerPoolAcceptTasks,
   initializeWorkerPool,
+  workerPoolLoad,
+  workerPoolReservedSlots,
+  reserveWorkerCore,
   probeWorkerPoolHeap,
   terminateWorkerPool,
   warmUpWorkerPool,
@@ -96,6 +101,7 @@ import {
 } from "./device";
 import {
   processEvent,
+  registerEventHandlers,
   EventContext,
   HillshadeContext,
   type BufferLoader,
@@ -154,7 +160,6 @@ import { hasObservedTerrainHeight } from "./terrain/terrainHeightEvent";
 import type { TextureOptions } from "./textures";
 import { TileTextureCompositor } from "./tileTexture";
 import {
-  type AbortControllers,
   type LayerDescription,
   type SourceDescription,
   type BuiltInEffectDescription,
@@ -163,7 +168,6 @@ import {
   type OmitType,
   type MeshCache,
   type PickedFeature,
-  type WorkerPoolPromises,
   type RenderFlag,
   type TileMapByHandle,
   type SourceRef,
@@ -190,6 +194,15 @@ export type FlyToOptions = {
    * descending from above 11,500 m. */
   easing?: FlyToEasing;
 };
+
+/** In-flight worker tasks the engine may hold per pool worker: one running
+ * plus one queued, so a worker never idles between tasks. */
+const WORKER_TASKS_PER_WORKER = 2;
+
+/** In-flight frontend jobs stop holding off `idle` once their count has not
+ * changed for this long (a server that never answers, an image that never
+ * loads). */
+const STALLED_JOBS_MS = 10_000;
 
 // Must mirror `FlyToEasing`'s `TryFrom<u8>` mapping on the Rust side.
 const FLY_TO_EASING_CODE: Record<FlyToEasing, number> = {
@@ -359,7 +372,7 @@ export type Options = {
   /** Enables mobile device optimizations such as lower pixel ratio. */
   mobileOptimization?: boolean;
   /**
-   * Milliseconds of inactivity (no Rust-side events) before the `idle` event fires.
+   * Milliseconds of inactivity (no Rust-side events and no in-flight fetch / worker / mesh job) before the `idle` event fires. In-flight jobs stop counting once their number has not changed for 10 s.
    * @defaultValue 100
    */
   idleThreshold?: number;
@@ -505,7 +518,7 @@ export type ViewEvents = {
    * input kinds apart.
    */
   click: (event: MapPointerEvent) => void;
-  /** Emitted when the engine becomes idle (no Rust-side events for `idleThreshold` ms). */
+  /** Emitted when the engine becomes idle (no Rust-side events and no in-flight fetch / worker / mesh job for `idleThreshold` ms; jobs stalled for 10 s stop counting). */
   idle: () => void;
 };
 
@@ -569,6 +582,21 @@ export default class ThreeView<
   private _declutterRetry: ReturnType<typeof setTimeout> | undefined;
   private _declutterRetryDelay = 0;
   private _isIdle = false;
+  /** Last frame a frontend job (fetch, worker task, mesh build) was still in
+   * flight; the view is not idle before `idleThreshold` has passed since. */
+  private _jobsBusyAt = 0;
+  private _jobsInFlight = 0;
+  /** Last frame the in-flight job count changed. */
+  private _jobsProgressedAt = 0;
+  private _workerPoolSize = 0;
+  /** The delegated-task cap last sent to the engine. */
+  private _maxWorkerTasks = 0;
+  /** Whether the engine's worker-task intake is paused because every pool
+   * worker is draining (over its heap budget). */
+  private _workerIntakePaused = false;
+  /** Pool tasks outside the engine's delegated tasks, as last reported. */
+  private _workerExternalLoad = 0;
+  private _workerTaskJobs?: RegisteredJobKind;
   private _uniforms: CommonUniforms;
   /** Pending `flyTo` promises keyed by flight id, settled by
    *  `camera_flight_ended` events from the engine. */
@@ -583,8 +611,6 @@ export default class ThreeView<
   private _hoveredFeature: Nullable<PickedFeature> = null;
 
   private _meshes: MeshCache = new Map();
-  private _abortControllers: AbortControllers = new Map();
-  private _workerPoolPromises: WorkerPoolPromises = new Map();
   private _loadedTexs = new Map<string, Texture>();
   private _texturizedSceneByTileCoordinates: TexturizedSceneByTileCoordinates;
   private _tileTextureCompositor!: TileTextureCompositor;
@@ -758,8 +784,8 @@ export default class ThreeView<
     triggerDataRequesterLoaded: (bits: bigint, handle: number) => {
       this._core?.triggerDataRequesterLoaded(bits, handle);
     },
-    triggerDataRequesterFailed: (bits: bigint) => {
-      this._core?.triggerDataRequesterFailed(bits);
+    triggerDataRequesterFailed: (bits: bigint, handle: number) => {
+      this._core?.triggerDataRequesterFailed(bits, handle);
     },
   };
   private _texFragment: TextureFragmentHandler = {
@@ -770,13 +796,10 @@ export default class ThreeView<
       this._core?.triggerTextureFragmentLoaded(bits, status);
     },
   };
-  // Per-frame snapshot of the WASM vector resolution revision, refreshed in `_render`.
-  private _vectorRevision = 0;
   // Per-frame snapshot of the WASM raster drape resolution revision, refreshed in `_render`.
   private _rasterRevision = 0;
   private _tileHandler: TileHandler = createTileHandler({
     getCore: () => this._core,
-    getVectorRevision: () => this._vectorRevision,
     getRasterRevision: () => this._rasterRevision,
   });
   private _globeHandler: GlobeHandler = {
@@ -875,7 +898,12 @@ export default class ThreeView<
     },
   };
   private _ownedRootElement: HTMLElement | undefined;
-  private _eventManager = new EventManager();
+  private _dispatcher = new JobDispatcher({
+    // A job landed something new on screen (tile mesh, feature, texture).
+    onSettled: () => {
+      this._renderFlag.forceUpdate = true;
+    },
+  });
   private _pickHelper?: PickHelper;
   private _terrainPicker: TerrainPicker;
   private _defaultTextureOptions: TextureOptions;
@@ -1504,6 +1532,7 @@ export default class ThreeView<
       this._options.memoryBudget?.maxPendingRequests ??
         budgets.maxPendingRequests,
     );
+    this._workerPoolSize = concurrencyManager.total;
 
     // Memory-pressure SSE degrade range. min > 1 (mobile) keeps far tiles
     // coarser at rest; max is the ceiling the dynamic degrade can climb to
@@ -1551,7 +1580,7 @@ export default class ThreeView<
       ),
     );
 
-    this._fontManager.setConcurrencyManager(concurrencyManager);
+    this._fontManager.setWorkerCoreReservation(reserveWorkerCore);
     this._fontManager.setMemoryBudget(
       this._options.memoryBudget?.fontBudgetBytes ?? budgets.fontBudgetBytes,
     );
@@ -1572,11 +1601,10 @@ export default class ThreeView<
     this.viewContext.on("gbufferRequirementsChanged", this._syncGBuffers);
     this.viewContext._setRegistries(this.registries);
     this.eventContext = new EventContext({
-      eventManager: this._eventManager,
+      dispatcher: this._dispatcher,
       scenes: this._scenes,
       camera: this._camera,
       meshes: this._meshes,
-      abortControllers: this._abortControllers,
       buf: this._buf,
       texFragment: this._texFragment,
       tileHandler: this._tileHandler,
@@ -1584,7 +1612,6 @@ export default class ThreeView<
       meshHandler: this._meshHandler,
       featureHandler: this._featureHandler,
       loadedTexs: this._loadedTexs,
-      workerPoolPromises: this._workerPoolPromises,
       uniforms: this._uniforms,
       texturizedSceneByTileCoordinates: this._texturizedSceneByTileCoordinates,
       tileTextureCompositor: this._tileTextureCompositor,
@@ -1609,6 +1636,7 @@ export default class ThreeView<
       declutter: this._declutter,
       colorMapAtlas: this._colorMapAtlas,
     });
+    this._workerTaskJobs = registerEventHandlers(this.eventContext).workerTasks;
 
     // Register built-in descriptors
     this.registerBuiltIns();
@@ -1806,11 +1834,8 @@ export default class ThreeView<
     this.transparentPass?.delete();
     this.finalPass?.delete();
 
-    // Abort all pending requests
-    for (const controller of this._abortControllers.values()) {
-      controller.abort();
-    }
-    this._abortControllers.clear();
+    // Abort all in-flight jobs (fetches, worker tasks, mesh builds).
+    this._dispatcher.dispose();
 
     // Dispose loaded textures (closes any ImageBitmap backing so the decoded
     // pixels are freed, not just the GL texture).
@@ -1832,7 +1857,6 @@ export default class ThreeView<
     // Clear caches and maps
     this._meshes.clear();
     this._inMemoryBufferStore.clear();
-    this._workerPoolPromises.clear();
     this._tileMapByHandle.clear();
     this._textureFragmentIndex.clear();
     this._tileMeshToFragmentIds.clear();
@@ -2037,14 +2061,56 @@ export default class ThreeView<
     this._colorMapAtlas.setColorMap(layerId, colorMap, colorStops);
   }
 
+  /**
+   * Report the worker pool's state to the engine's worker-task admission:
+   *
+   * - The cap: two tasks per pool slot that takes tasks, so the pool's queue
+   *   stays shallow and a waiting task is at most one pool pass away. Slots
+   *   reserved for a thread outside the pool (`reserveWorkerCore`) take
+   *   none, which leaves their cores idle.
+   * - The pool tasks outside its delegated tasks (image decodes, Draco,
+   *   descriptor and plugin tasks, tasks cancelled while running), which take
+   *   from the same cap, so a burst of them does not queue the next terrain
+   *   mesh behind it. Each in-flight delegated job holds one pool task.
+   * - Whether to pause intake (and model feature adds and image fetches,
+   *   which also run on the pool) while every pool worker is over its heap
+   *   budget, so the draining workers reach a task boundary and recycle
+   *   instead of receiving more work; it resumes once a recycled worker is
+   *   back.
+   */
+  private _syncWorkerPool() {
+    const maxTasks =
+      (this._workerPoolSize - workerPoolReservedSlots()) *
+      WORKER_TASKS_PER_WORKER;
+    if (maxTasks !== this._maxWorkerTasks) {
+      this._maxWorkerTasks = maxTasks;
+      this._core?.setMaxWorkerTasks(maxTasks);
+    }
+
+    const external = Math.max(
+      0,
+      workerPoolLoad() - (this._workerTaskJobs?.inFlight() ?? 0),
+    );
+    if (external !== this._workerExternalLoad) {
+      this._workerExternalLoad = external;
+      this._core?.setWorkerExternalLoad(external);
+    }
+
+    const paused = !canWorkerPoolAcceptTasks();
+    if (paused === this._workerIntakePaused) return;
+    this._workerIntakePaused = paused;
+    this._core?.setWorkerIntakePaused(paused);
+  }
+
   /** Returns true if the scene was updated and needs to be rendered. */
   private _update(updatedAt: number): boolean {
     this.emit("preUpdate", updatedAt);
 
+    this._syncWorkerPool();
     this._core?.update(updatedAt);
 
     const events = this._core?.readEvents();
-    if ((!events && !this._eventManager.needsUpdate()) || !this._core) {
+    if (!events || !this._core) {
       return false;
     }
 
@@ -2101,10 +2167,9 @@ export default class ThreeView<
   }
 
   private _render(updatedAt: number) {
-    // Read the vector/raster resolution revisions once per frame so each terrain
-    // tile's `onBeforeRender` can gate its slot re-fetch against them without its
-    // own FFI calls.
-    this._vectorRevision = this._core?.vectorRevision() ?? this._vectorRevision;
+    // Read the raster resolution revision once per frame so each terrain tile's
+    // `onBeforeRender` can gate its slot re-fetch against it without its own FFI
+    // call.
     this._rasterRevision = this._core?.rasterRevision() ?? this._rasterRevision;
 
     this._uniforms.time.value = updatedAt;
@@ -3181,12 +3246,24 @@ export default class ThreeView<
         this._render(time);
       this._renderFlag.forceUpdate = false;
 
+      // In-flight jobs keep the view busy even when the engine emits
+      // nothing while it waits on them, unless they have stalled.
+      const jobsInFlight = this._dispatcher.inFlight();
+      if (jobsInFlight !== this._jobsInFlight) {
+        this._jobsInFlight = jobsInFlight;
+        this._jobsProgressedAt = time;
+      }
+      if (jobsInFlight > 0 && time - this._jobsProgressedAt < STALLED_JOBS_MS) {
+        this._jobsBusyAt = time;
+      }
+
       if (updated) {
         this._isIdle = false;
       } else if (
         !this._isIdle &&
         this.eventContext.updatedAt > 0 &&
-        time - this.eventContext.updatedAt >= idleThreshold
+        time - Math.max(this.eventContext.updatedAt, this._jobsBusyAt) >=
+          idleThreshold
       ) {
         this._isIdle = true;
         this.emit("idle");

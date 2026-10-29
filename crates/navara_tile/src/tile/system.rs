@@ -238,7 +238,8 @@ pub fn update_terrain(
     // A terrain layer teardown (`sync_terrain_layer_changes`) sets this so
     // terrain re-traverses even with a static camera and re-meshes the tiles back
     // to the flat ellipsoid once the `TerrainLayer` is gone. Consume it here.
-    let is_source_changed = tc.force_update;
+    // A tile waiting to fetch its own DEM asks for one traversal at its due time.
+    let is_forced = tc.force_update || tc.retraverse_at.is_some_and(|at| frame.updated_at() >= at);
     tc.force_update = false;
 
     let needs_update = is_texture_fragment_changed
@@ -253,7 +254,7 @@ pub fn update_terrain(
         || is_tile_layer_added
         || is_terrain_layer_added
         || is_layers_len_changed
-        || is_source_changed
+        || is_forced
         || is_fog_changed
         || pressure.is_changed()
         || exaggeration.is_changed();
@@ -262,7 +263,8 @@ pub fn update_terrain(
     }
 
     tc.is_updated_in_this_frame = true;
-    tc.last_rendered_frame = frame.rendered_frame();
+    tc.retraverse_at = None;
+    tc.begin_traversal(frame.rendered_frame());
     tc.prev_layers_len = tiles_len;
 
     // Memory-pressure LOD degrade, weighted by distance relative to the

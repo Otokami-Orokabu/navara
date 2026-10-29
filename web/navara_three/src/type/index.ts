@@ -12,7 +12,6 @@ import type {
   Tiles3dSourceDescription,
   SourceDescription as SourceDescriptionImpl,
 } from "@navaramap/engine";
-import type { Promise as WorkerPoolPromise } from "@navaramap/worker";
 import type { Feature, FeatureCollection, Geometry } from "geojson";
 import type { Mesh, Sprite, Object3D } from "three";
 
@@ -261,10 +260,6 @@ export type MeshCache = Map<string, Mesh | Sprite | Object3D>;
 
 // Make a reference of TileMesh by TileHandle.
 export type TileMapByHandle = Map<TileHandle, TileMesh>;
-
-export type AbortControllers = Map<string, AbortController>;
-
-export type WorkerPoolPromises = Map<string, WorkerPoolPromise<unknown>>;
 
 export type PickedFeature = FeatureInfo;
 

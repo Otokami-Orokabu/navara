@@ -165,7 +165,7 @@ flowchart TD
   B -- no --> C["compute SSE, readiness"]
   C --> D{"SSE ≤ max_sse ?"}
   D -- "yes (tile is detailed enough)" --> E{renderable?}
-  E -- "yes (own DEM, or upsampled)" --> R["TileRendered<br/>still upsampled → fetch own DEM now"]
+  E -- "yes (own DEM, or upsampled)" --> R["TileRendered<br/>still upsampled → fetch own DEM after 200 ms as leaf"]
   E -- "no (nothing to upsample from)" --> REQ["request terrain data → NotFound"]
   D -- "no (need more detail)" --> F["recurse into 4 children"]
   F --> G{all children prepared?}
@@ -257,21 +257,26 @@ Three subtleties make terrain + imagery work together:
   one traversal spawns every level below a shown tile and they all build in
   parallel, nearest first; the swap still applies top down, group by group, so
   the coarse ancestor covering a region revealed by a zoom-out is replaced
-  after one round trip rather than one per level. An intermediate level is
-  usually the activated SSE leaf for a moment while its own children are still
-  building, so it issues its own DEM fetch before they replace it. Quantized-mesh tiles clip the ancestor's TIN down along the quadrant
+  after one round trip rather than one per level. Quantized-mesh tiles clip the ancestor's TIN down along the quadrant
   path (an upsampled ancestor works as a source too); raster-DEM tiles instead
   resample the ancestor's DEM pixels bilinearly and mesh them with martini
   at the tile's own level, so the upsampled tile looks like a lower-resolution
   real tile rather than a copy of the ancestor's coarser simplification. A
   rejected DEM request (rate limiter) only drops the requester; the tile keeps
   its terrain data and upsampled mesh and retries next frame. The SSE leaf
-  fetches its own DEM in the same traversal that selects it, in parallel with
-  its upsample: the upsampled mesh is only a stand-in, and waiting for the
-  leaf to be activated (every group above it swapped in first) would just
-  delay the replacement. Intermediate levels never meet SSE and fetch only
-  once they are actually on screen (activated) with their children still
-  building, so an upsample chain does not fetch every level it passes.
+  fetches its own DEM without waiting to be activated, in parallel with its
+  upsample: the upsampled mesh is only a stand-in, and waiting for every
+  group above it to swap in first would just delay the replacement.
+  Intermediate levels never meet SSE and fetch only once they are actually
+  on screen (activated) with their children still building, so an upsample
+  chain does not fetch every level it passes. Both wait out
+  `STAND_IN_FETCH_DELAY_MS` (200 ms) of consecutive traversals while their
+  stand-in covers them (`TerrainTile::dem_wanted_since`): a camera flight
+  drops its transient leaves and briefly shown levels within that time, so
+  they never fetch. With a static camera, waiting tiles do not force a
+  traversal every frame: they record the earliest due time in
+  `TileCacheManager::retraverse_at`, and `update_terrain` traverses once
+  when it passes. A leaf with nothing to upsample from fetches at once.
   When the DEM lands, `transfer_mesh` rebuilds the mesh from real data and
   rewrites the tile's `Mesh` in place, reported through the geometry-only
   `mesh_geometry_replaced` event (not `mesh_updated`, whose handler rebinds
@@ -326,7 +331,7 @@ sequenceDiagram
   TM->>W: spawn UpsampleTerrainMesh task (source = ancestor)
   W-->>TM: task completed (geometry)
   TM->>TM: store buffers, spawn TileMeshMarker + Mesh + Material
-  T->>T: tile is the SSE leaf → request_terrain_data() (no wait for activation)
+  T->>T: tile stays the SSE leaf for 200 ms → request_terrain_data() (no wait for activation)
   T->>TM: DEM landed on an upsampled tile
   TM->>W: spawn ConstructTerrainMesh task
   W-->>TM: task completed (geometry)

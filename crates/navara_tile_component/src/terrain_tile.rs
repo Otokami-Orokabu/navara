@@ -53,6 +53,10 @@ pub struct TerrainTile {
     pub children_take_over: Option<ChildrenTakeOver>,
     pub rendered_at: usize,
     pub visited_at: usize,
+    /// `FrameManager::updated_at` of the first of the consecutive traversals
+    /// that have wanted this tile's own DEM while a stand-in mesh covers it.
+    /// `None` when the latest traversal did not want it.
+    pub dem_wanted_since: Option<f64>,
     pub terrain_data: Option<Box<dyn TerrainData>>,
     pub hillshade_entity_ids: Option<Vec<Option<Entity>>>,
     pub occludee_point_in_scaled_space: Option<Vec3>,
@@ -94,6 +98,7 @@ impl Clone for TerrainTile {
             children_take_over: None,
             rendered_at: self.rendered_at,
             visited_at: self.visited_at,
+            dem_wanted_since: self.dem_wanted_since,
             terrain_data: self.terrain_data.as_ref().map(|t| t.box_clone()),
             hillshade_entity_ids: self.hillshade_entity_ids.clone(),
             occludee_point_in_scaled_space: self.occludee_point_in_scaled_space,
@@ -257,6 +262,7 @@ impl TerrainTile {
             exaggeration: TerrainExaggeration::default(),
             rendered_at: 0,
             visited_at: 0,
+            dem_wanted_since: None,
             terrain_data: None,
             hillshade_entity_ids: None,
             occludee_point_in_scaled_space: None,

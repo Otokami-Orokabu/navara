@@ -30,7 +30,12 @@ const TESTS_URL = path
   .split(path.sep)
   .join("/");
 
-export default function writeReport() {
+/** Skipped when setup.ts failed, since no test ran. */
+export default function teardown() {
+  if (process.env.RENDER_RUN_STARTED) writeReport();
+}
+
+function writeReport() {
   const support = readSupportTable();
   const results: ReportRow[] = [];
   const unsupported: Unsupported[] = [];

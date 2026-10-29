@@ -1,5 +1,7 @@
 import { execFileSync } from "node:child_process";
 
+import { chromium } from "@playwright/test";
+
 import { UPSTREAM_DIR, readLock } from "../lib/config";
 
 const SPARSE_PATTERNS = [
@@ -48,11 +50,29 @@ function syncFixtures() {
 }
 
 /**
- * Syncs the fixtures and marks the run's start for the report, which lists
- * the cases updated by this run first. Workers inherit `process.env` from the
- * runner.
+ * Fails the run once when Chromium cannot start, instead of in every test.
+ * Each Playwright version needs its own browser build, so a version bump
+ * leaves it missing until it is installed.
  */
-export default function setup() {
+async function checkBrowser() {
+  try {
+    await (await chromium.launch()).close();
+  } catch (e) {
+    throw new Error(
+      "Cannot launch Chromium. Install the browser for this Playwright version:\n" +
+        "  pnpm -C web/navara_maplibre_style/integration-test exec playwright install chromium",
+      { cause: e },
+    );
+  }
+}
+
+/**
+ * Checks the browser, syncs the fixtures, and marks the run's start for the
+ * report, which lists the cases updated by this run first. Workers inherit
+ * `process.env` from the runner.
+ */
+export default async function setup() {
+  await checkBrowser();
   syncFixtures();
   process.env.RENDER_RUN_STARTED = String(Date.now());
 }

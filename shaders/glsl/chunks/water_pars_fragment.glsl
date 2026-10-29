@@ -48,7 +48,8 @@ vec3 specularColor( const vec3 surfaceNormal, const vec3 eyeDirection, float shi
 
     vec3 reflection = normalize( reflect( -sunLightDirection, surfaceNormal ) );
     float direction = max(dot( eyeDirection, reflection ), 0.0);
-    return pow( direction, shiny ) * sunLightColor * spec;
+    // A layer may set shininess 0, and pow(0, 0) is undefined (NaN on some GPUs).
+    return pow( direction, max( shiny, 1e-4 ) ) * sunLightColor * spec;
 }
 
 // Compute water Fresnel factor

@@ -109,7 +109,7 @@ export function generateTileMapFragment(
   }`
     : "";
   return `
-  // The atlases are linear-filtered for display, but the pick pass reads
+  // The color atlas is linear-filtered for display, but the pick pass reads
   // encoded batch ids out of atlasColor: interpolating id colors at feature
   // edges decodes to batch ids that don't exist (a thin draped polyline is
   // almost all edge pixels). Snap to the texel center (nearest sampling)

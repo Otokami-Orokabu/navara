@@ -82,6 +82,11 @@ export const defaultAtlasFactory =
       stencilBuffer: false,
     });
     const [color, attr, normal] = target.textures;
+    // attr.a packs the winning slot index: a filtered fetch between two slots
+    // decodes to a slot that never won the texel, and the flags in attr.r/g
+    // must describe the same winner as that index.
+    attr.minFilter = NearestFilter;
+    attr.magFilter = NearestFilter;
     return {
       target,
       color,

@@ -410,6 +410,12 @@ That `attr.a` is how the absolute winning slot survives into the main shader,
 and `attr.g` is how raster and vector pixels stay distinguishable — both used in
 the next stage.
 
+`attr` is sampled with `NearestFilter`, while `color` and `normal` stay linear.
+A filtered fetch on the edge between two slots would blend their indices into a
+slot that never won the texel (often an unused one with zeroed uniforms), and
+the interpolated `attr.r` / `attr.g` flags would no longer describe the slot
+`attr.a` names.
+
 ## 5. Sampling on screen
 
 The terrain's main shader (injected via `material/macro/tileShader.ts`) is now

@@ -13,18 +13,12 @@ import {
 } from "../../../helpers/constants";
 
 import { BloomEffectDesc, type BloomDescriptions } from "./bloom";
-import {
-  BuildingWindowsPlugin,
-  type BuildingWindowsDescriptions,
-} from "./buildingWindows";
+import { BuildingWindowsPlugin } from "./buildingWindows";
 import { StreetsPlugin } from "./streets";
 import type { StreetTrafficDescriptions } from "./streetTraffic";
 
 export type NightDescriptions =
-  | DefaultDescriptions
-  | BuildingWindowsDescriptions
-  | StreetTrafficDescriptions
-  | BloomDescriptions;
+  DefaultDescriptions | StreetTrafficDescriptions | BloomDescriptions;
 
 type NightView = ThreeView<NightDescriptions>;
 

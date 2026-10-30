@@ -156,7 +156,11 @@ const readTallBuildings = (
   }
 };
 
-/** Reads roads and tall buildings from OpenMapTiles-schema tiles, one at a time. */
+/**
+ * Reads roads and tall buildings from OpenMapTiles-schema tiles, one at a
+ * time. The engine decodes these same tiles for rendering but exposes no
+ * feature geometry to TypeScript, hence the second fetch.
+ */
 class TileLoader {
   private readonly template: string;
 
@@ -327,12 +331,12 @@ const lampsAlongLine = (
 };
 
 /** Street lamps along every road and a red beacon on every tall roof. */
-const roadLights = (
+const tileLights = (
   network: RoadNetwork,
 ): FeatureCollection<Point, LightProperties> => {
-  // Seeded per tile so a tile looks the same each time it streams in; the
-  // generator is shared, but this runs to completion before anything else
-  // touches it.
+  // Reseeded for every tile so a tile looks the same each time it streams
+  // in; the generator is shared, but this runs to completion before anything
+  // else touches it.
   MathUtils.seededRandom(7);
   const rand = () => MathUtils.seededRandom();
   const features: Feature<Point, LightProperties>[] = [];
@@ -375,7 +379,7 @@ const CAR_HEIGHT = 0.6;
 
 /** Scatters cars over the road segments; each car drives one segment and wraps. */
 const buildTraffic = (roads: Road[], origin: Vector3): StreetTrafficData => {
-  // Seeded per tile, like `roadLights`.
+  // Reseeded for every tile, like `tileLights`.
   MathUtils.seededRandom(11);
   const rand = () => MathUtils.seededRandom();
   const start: number[] = [];
@@ -531,11 +535,11 @@ type StreetTile = {
   traffic: MeshHandle<StreetTrafficMeshDesc>;
 };
 
-const removeTile = (lights: StreetTile) => {
-  lights.lamps.delete();
-  lights.beacons.delete();
-  lights.source.delete();
-  lights.traffic.delete();
+const removeTile = (tile: StreetTile) => {
+  tile.lamps.delete();
+  tile.beacons.delete();
+  tile.source.delete();
+  tile.traffic.delete();
 };
 
 // --- Plugin ----------------------------------------------------------------
@@ -675,7 +679,7 @@ export class StreetsPlugin extends Plugin<
     const view = this.ready;
     const source = view.addSource({
       type: "geojson",
-      data: roadLights(network),
+      data: tileLights(network),
     });
 
     // Sized in meters so the far field thins out with distance instead of

@@ -17,6 +17,7 @@ import {
   type Source,
   type ViewContext,
 } from "@navaramap/three";
+import SelectiveEffectMaskChunk from "@shaders/glsl/chunks/selective_effect_mask.glsl?raw";
 import { Pass as PostProcessingPass } from "postprocessing";
 import {
   DataTexture,
@@ -51,7 +52,7 @@ export type BuildingWindowsOptions = {
 };
 
 export type BuildingWindowsEffectConfig = {
-  buildingWindows: BuildingWindowsOptions;
+  buildingWindows?: BuildingWindowsOptions;
 } & EffectConfig;
 
 export type BuildingWindowsEffectUpdate = {
@@ -194,6 +195,7 @@ const createWindowTexture = (): DataTexture => {
 const fragmentShader = /* glsl */ `
 #include <packing>
 ${NORMAL_PACKING_SHADER}
+${SelectiveEffectMaskChunk}
 
 uniform sampler2D tDiffuse;
 uniform sampler2D tEffectIds;
@@ -262,9 +264,8 @@ float nvrLitMask(vec4 m, float ratio) {
 // its mip level, which need uniform control flow.
 void main() {
   vec4 base = texture2D(tDiffuse, vUv);
-  int mask = int(texture2D(tEffectIds, vUv).r + 0.5);
   float depth = unpackRGBAToDepth(texture2D(tDepth, vUv));
-  float selected = float((mask >> uSlot) & 1) * (1.0 - step(1.0 - 1.0 / 8388608.0, depth));
+  float selected = extractEffectBit(texture2D(tEffectIds, vUv).r, uSlot) * (1.0 - step(1.0 - 1.0 / 8388608.0, depth));
 
   vec3 normalWorld = uCameraRotation * unpackVec2ToNormal(texture2D(tNormal, vUv).xy);
   // Roofs and floors get no windows.
@@ -324,11 +325,6 @@ void main() {
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }
 `;
-
-const isBuildingWindowsOptions = (
-  value: unknown,
-): value is BuildingWindowsOptions =>
-  typeof value === "object" && value !== null;
 
 class BuildingWindowsPass extends PostProcessingPass {
   private readonly desc: BuildingWindowsEffectDesc;
@@ -394,14 +390,17 @@ class BuildingWindowsPass extends PostProcessingPass {
     // Re-read every frame: a G-buffer config change rebuilds the attachments.
     uniforms.tNormal.value = this.mrt.normalBuffer;
     uniforms.tDepth.value = this.mrt.depthBuffer;
-    uniforms.uSlot.value = Math.max(0, this.desc.getEffectSlot());
     uniforms.uInverseProjection.value.copy(camera.projectionMatrixInverse);
     uniforms.uCameraRotation.value.setFromMatrix4(camera.matrixWorld);
     uniforms.uLogDepthFar.value = Math.log2(camera.far + 1);
     uniforms.uLitRatio.value = this.desc.options.litRatio;
     uniforms.uFloorHeight.value = this.desc.options.floorHeight;
     uniforms.uColumnWidth.value = this.desc.options.columnWidth;
-    uniforms.uIntensity.value = this.desc.options.intensity;
+    // Passthrough while the effect has no slot yet, as the built-in
+    // selective effects do.
+    const slot = this.desc.getEffectSlot();
+    uniforms.uSlot.value = Math.max(0, slot);
+    uniforms.uIntensity.value = slot < 0 ? 0 : this.desc.options.intensity;
     uniforms.uPixelAngle.value =
       (2 * Math.tan((camera.fov * Math.PI) / 360)) / inputBuffer.height;
 
@@ -424,8 +423,15 @@ class BuildingWindowsPass extends PostProcessingPass {
  * `effectIds`: a floor/column grid anchored to the world, with the lit share
  * rising with height above the ellipsoid.
  */
+// The desc keeps the options resolved, so `config.buildingWindows` is never
+// missing past the constructor.
+type ResolvedConfig = BuildingWindowsEffectConfig & {
+  buildingWindows: BuildingWindowsOptions;
+  selectiveEffect?: true;
+};
+
 export class BuildingWindowsEffectDesc extends SelectiveEffectDesc<
-  BuildingWindowsEffectConfig & { selectiveEffect?: true },
+  ResolvedConfig,
   BuildingWindowsEffectUpdate
 > {
   static key = "buildingWindows";
@@ -436,15 +442,14 @@ export class BuildingWindowsEffectDesc extends SelectiveEffectDesc<
     "selectiveEffect",
   ];
 
-  // The effect registry hands over the generic EffectConfig.
-  constructor(view: ThreeView, ctx: ViewContext, config: EffectConfig) {
+  constructor(
+    view: ThreeView,
+    ctx: ViewContext,
+    config: BuildingWindowsEffectConfig,
+  ) {
     super(view, ctx, {
       ...config,
-      buildingWindows:
-        "buildingWindows" in config &&
-        isBuildingWindowsOptions(config.buildingWindows)
-          ? { ...config.buildingWindows }
-          : {},
+      buildingWindows: { ...config.buildingWindows },
       selectiveEffect: true,
     });
   }

@@ -28,8 +28,12 @@ export type StreetTrafficOptions = {
   size?: number;
 };
 
+type StreetTrafficDescription = {
+  data: StreetTrafficData;
+} & StreetTrafficOptions;
+
 type Description = {
-  streetTraffic: { data: StreetTrafficData } & StreetTrafficOptions;
+  streetTraffic?: StreetTrafficDescription;
 };
 
 export type StreetTrafficMeshConfig = MeshConfig & Description;
@@ -44,14 +48,6 @@ const DEFAULTS: Required<StreetTrafficOptions> = {
   speed: 1,
   size: 2.5,
 };
-
-const isStreetTrafficMeshConfig = (
-  config: MeshConfig,
-): config is StreetTrafficMeshConfig =>
-  "streetTraffic" in config &&
-  typeof config.streetTraffic === "object" &&
-  config.streetTraffic !== null &&
-  "data" in config.streetTraffic;
 
 const vertexShader = /* glsl */ `
 #include <common>
@@ -126,26 +122,27 @@ export class StreetTrafficMeshDesc extends MeshDesc<
 > {
   static key = "streetTraffic";
 
-  private config: StreetTrafficMeshConfig;
+  private readonly traffic: StreetTrafficDescription;
 
-  // The mesh registry hands over the generic MeshConfig.
-  constructor(view: ThreeView, ctx: ViewContext, config: MeshConfig) {
-    if (!isStreetTrafficMeshConfig(config)) {
-      throw new Error(
-        "StreetTrafficMeshDesc: `streetTraffic.data` is required.",
-      );
+  constructor(
+    view: ThreeView,
+    ctx: ViewContext,
+    config: StreetTrafficMeshConfig,
+  ) {
+    if (!config.streetTraffic) {
+      throw new Error("StreetTrafficMesh configuration is required");
     }
     super(view, ctx, config);
-    this.config = config;
+    this.traffic = config.streetTraffic;
   }
 
   private get options(): Required<StreetTrafficOptions> {
-    const { speed, size } = this.config.streetTraffic;
+    const { speed, size } = this.traffic;
     return { speed: speed ?? DEFAULTS.speed, size: size ?? DEFAULTS.size };
   }
 
   createMesh() {
-    const { data } = this.config.streetTraffic;
+    const { data } = this.traffic;
     const geometry = new BufferGeometry();
     geometry.setAttribute("position", new BufferAttribute(data.start, 3));
     geometry.setAttribute("aEnd", new BufferAttribute(data.end, 3));
@@ -188,7 +185,7 @@ export class StreetTrafficMeshDesc extends MeshDesc<
 
   onUpdateConfig(updates: StreetTrafficMeshUpdate): void {
     super.onUpdateConfig(updates);
-    Object.assign(this.config.streetTraffic, updates.streetTraffic);
+    Object.assign(this.traffic, updates.streetTraffic);
     if (!this._instance) return;
     const uniforms = this._instance.material.uniforms;
     uniforms.uSpeedScale.value = this.options.speed;

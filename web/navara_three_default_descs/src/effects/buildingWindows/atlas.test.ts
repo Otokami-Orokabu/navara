@@ -18,7 +18,10 @@ describe("createWindowAtlasData", () => {
   const data = createWindowAtlasData();
 
   it("is deterministic", () => {
-    expect(createWindowAtlasData()).toEqual(data);
+    // Index of the first texel that differs; `toEqual` on 4 MB is too slow.
+    const again = createWindowAtlasData();
+    expect(again.length).toBe(data.length);
+    expect(again.findIndex((v, i) => v !== data[i])).toBe(-1);
   });
 
   it("keeps the gaps between windows dark", () => {

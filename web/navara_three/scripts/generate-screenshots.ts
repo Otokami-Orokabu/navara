@@ -133,9 +133,9 @@ const PAGE_CONFIGS: Record<string, PageConfig> = {
   "use-cases-interior-explore": {
     waitTime: 60000,
   },
-  "use-cases-night-city": {
+  "showcase/night-city": {
     // Vector tile buildings plus 25 road tiles streamed in around the camera.
-    waitTime: 60000,
+    waitTime: 90000,
   },
   "mesh/arcline": {
     waitTime: 12000,
